@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
+#![feature(core_float_math)]
 
 const VERSION: &str = "1.0.0";
 
@@ -13,28 +14,36 @@ const ENABLE_LIGATURES: bool = true;
 
 
 const ALLOW_RATIOS: &[(usize, usize)] = &[
+    (21, 9),
+    (32, 9),
     (16, 9),
     (16, 10),
-    (4, 3)
+    (4, 3),
+    (3, 2),
+    (5, 4),
 ];
 
 unsafe extern "C" {
     static __ImageBase: u8;
 }
 
-extern crate alloc;
-
 use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::arch::x86_64;
 use core::panic::PanicInfo;
-use core::ptr::{null, NonNull};
-use uefi::{entry, Identify};
-use uefi::boot::SearchType;
-use uefi_raw::Status;
+use core::ptr::NonNull;
 use spin::RwLock;
 use bitflags::bitflags;
+use num_traits::Zero;
 use spin::mutex::Mutex;
+use uefi::boot::{OpenProtocolAttributes, OpenProtocolParams, SearchType};
+use uefi::{entry, Identify};
+use uefi_raw::Status;
 use util::result;
+use crate::util::result::Error;
+
+extern crate alloc;
 
 mod fonts;
 mod cpu;
@@ -48,6 +57,7 @@ mod util;
 pub static ALLOC: uefi::allocator::Allocator = uefi::allocator::Allocator;
 
 bitflags!{
+    #[derive(Debug)]
     pub struct State: u8 {
         const DEST = 1 << 0;
         const RUNNING = 1 << 1;
@@ -55,8 +65,9 @@ bitflags!{
     }
 }
 
+#[derive(Debug)]
 struct WatchingItem {
-    pub ptr: *const fn(&Main) -> result::Result,
+    pub ptr: u64,
     pub reversed_ptr: u64,
     pub level: u8,
     pub state: State,
@@ -65,12 +76,17 @@ struct WatchingItem {
 impl WatchingItem {
     #[inline]
     pub fn new(ptr: *const fn(&Main) -> result::Result, level: u8) -> Self {
-        Self { ptr, level, state: State::empty() }
+        Self {
+            ptr: (ptr.addr() ^ level as usize ^ 7) as u64,
+            reversed_ptr: ptr.addr().reverse_bits() as u64,
+            level,
+            state: State::empty()
+        }
     }
 
     #[inline]
     pub fn is_none(&self) -> bool {
-        self.ptr.is_null()
+        self.ptr.is_zero()
     }
 
     #[inline]
@@ -101,14 +117,20 @@ impl Main<'_> {
         uefi::helpers::init().expect("Failed to init uefi helpers");
     }
 
-    fn init_gop(&self) {
-        let handle = uefi::boot::
-        locate_handle_buffer(SearchType::ByProtocol(&uefi::proto::console::gop::GraphicsOutput::GUID))
-            .expect("Failed to find GOP handles");
+    fn init_gop(&self) -> result::Result<()> {
+        let handle = Error::try_raise(uefi::boot::
+        locate_handle_buffer(SearchType::ByProtocol(&uefi::proto::console::gop::GraphicsOutput::GUID)), Some("Failed to get GOP handle"))?;
 
-        let mut gop =
-            uefi::boot::open_protocol_exclusive::<uefi::proto::console::gop::GraphicsOutput>(handle[0])
-                .expect("Failed to open GOP");
+        let mut gop = unsafe {
+            Error::try_raise(uefi::boot::open_protocol::<uefi::proto::console::gop::GraphicsOutput>(
+                OpenProtocolParams {
+                    handle: handle[0],              // 取得したハンドル
+                    agent: uefi::boot::image_handle(), // 自分のImageHandle
+                    controller: None,               // 基本はNoneでOK
+                },
+                OpenProtocolAttributes::GetProtocol,
+            ), Some("failed to open GP protocol"))?
+        };
 
         // いい感じのを選ぶ
         // w, レベル, index
@@ -134,7 +156,7 @@ impl Main<'_> {
         }
 
         if let Some((_, _, mode)) = target {
-            gop.set_mode(&mode).expect("Failed to set video mode");
+            Error::try_raise(gop.set_mode(&mode), Some("Failed to set video mode"))?;
         }
 
         let info = gop.current_mode_info();
@@ -158,29 +180,35 @@ impl Main<'_> {
         }
 
         *data = Some(gop_data);
+
+        Ok(())
     }
 
-    fn frist_init(&self) {
+    fn frist_init(&self) -> Vec<result::Result> {
+        let mut ret = vec![];
+
         self.init_dep();
-        let res = cpu::mitigation::ucode::load();
+        ret.push(cpu::mitigation::ucode::load());
         
-        self.init_gop();
+        ret.push(self.init_gop());
+
+        ret
     }
 
     fn a_run_watching(&self, is_bsp: bool) -> u8 { //! TODO (同権限内の)Spectre及びBHIの大部分の系列, Rowhammer脆弱性の踏み台になる可能性の対策
-        for (index, i) in self.watching_list.iter().enumerate() {
+        for (_, i) in self.watching_list.iter().enumerate() {
             let mut data = i.lock();
 
-            x86_64::_mm_lfence();
+            unsafe{x86_64::_mm_lfence()};
             if data.is_none() || data.is_running() || (data.is_dest() && !is_bsp) {
                 core::hint::spin_loop();
                 continue;
             }
 
-            x86_64::_mm_lfence(); // BHIとかSpectreやRowhammer対策
-            let de_ptr = data.ptr ^ index ^ 7;
+            unsafe{x86_64::_mm_lfence()}; // BHIとかSpectreやRowhammer対策
+            let de_ptr = data.ptr ^ data.level as u64 ^ 7;
 
-            x86_64::_mm_lfence();
+            unsafe{x86_64::_mm_lfence()};
             if de_ptr as u64 != (data.reversed_ptr.reverse_bits()) {
                 data.state |= State::ERR;  // ぶっこわれてるのであうと
                 return 2;  // 何なら攻撃の可能性もある
@@ -190,11 +218,11 @@ impl Main<'_> {
 
             data.state |= State::RUNNING;
 
-            let mut func = unsafe{*de_ptr};
+            let func = unsafe { core::mem::transmute::<*const (), fn(&Main) -> result::Result>(de_ptr as *const _) };
             let result = func(self);
 
             data.state &= !State::RUNNING;
-            data.ptr = null();
+            data.ptr = 0;
 
             if result.is_err() {
                 data.state |= State::ERR;
@@ -206,19 +234,26 @@ impl Main<'_> {
     }
 
     pub fn main(&self) -> ! {
-        self.frist_init();
+        let res = self.frist_init();
+        if res[1].is_err() {
+            res[1].clone().expect("Failed to get GOP data");
+        }
 
-        loop {}
+        loop {
+            core::hint::spin_loop();
+        }
     }
 }
 
 #[entry]
-fn main() -> Status {
-    Status::ABORTED
+pub fn main() -> Status {
+    let main = Main::default();
+
+    main.main();
 }
 
 #[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
+fn panic(_info: &PanicInfo) -> ! {
     loop {
         core::hint::spin_loop()
     }

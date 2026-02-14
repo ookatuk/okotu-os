@@ -23,7 +23,7 @@ fn insert<T>(target: *mut T, index: usize, value: T, max: usize) {
 }
 
 pub struct InternalBoundaryTagFrameAllocator {
-    table_ptr: MemMap<NonNull<u32>>,
+    pub(crate) table_ptr: MemMap<NonNull<u32>>,
     table_len:  u32,
 }
 
@@ -81,7 +81,7 @@ impl InternalBoundaryTagFrameAllocator {
             let entry_ptr = unsafe { self.table_ptr.start.as_ptr().add(i as usize) };
             let start_page = unsafe { entry_ptr.read() };
 
-            let size = unsafe { ((start_page as usize) << 12 as *const u32).read() };
+            let size = unsafe { (((start_page as usize) << 12) as *const u32).read() };
 
             if target_page >= start_page && target_page < (start_page + size) {
                 return false;
@@ -107,7 +107,7 @@ impl InternalBoundaryTagFrameAllocator {
 
         for i in 0..self.table_len {
             let entry_ptr = unsafe { self.table_ptr.start.as_ptr().add(i as usize) };
-            let loc = unsafe { entry_ptr.read() } as usize; // 空きブロックの開始ページ
+            let loc: usize = unsafe { entry_ptr.read() } as usize; // 空きブロックの開始ページ
             let size = unsafe { ((loc << 12) as *const u32).read() } as usize;
 
             if table_end_page >= loc && table_end_page < (loc + size) {
@@ -119,9 +119,9 @@ impl InternalBoundaryTagFrameAllocator {
                     } else if loc == table_end_page {
                         let new_loc = (loc + 1) as u32;
                         entry_ptr.write(new_loc);
-                        ((new_loc as usize) << 12 as *mut u32).write((size - 1) as u32);
+                        (((new_loc as usize) << 12) as *mut u32).write((size - 1) as u32);
                     } else {
-                        (loc << 12 as *mut u32).write((size - 1) as u32);
+                        ((loc << 12) as *mut u32).write((size - 1) as u32);
                     }
 
                     self.table_ptr.end = NonNull::new_unchecked(
@@ -140,12 +140,12 @@ impl InternalBoundaryTagFrameAllocator {
         let align = layout.align();
 
         for i_idx in 0..self.table_len {
-            let entry_ptr = self.table_ptr.start.as_ptr().add(i_idx as usize);
+            let entry_ptr = unsafe{self.table_ptr.start.as_ptr().add(i_idx as usize)};
 
-            let start_page_idx = entry_ptr.read() as usize;
+            let start_page_idx = unsafe{entry_ptr.read()} as usize;
             let block_start_addr = start_page_idx << 12; // * 4096
 
-            let available_pages = (block_start_addr as *const u32).read() as usize;
+            let available_pages = unsafe{(block_start_addr as *const u32).read()} as usize;
             let block_end_addr = block_start_addr + (available_pages << 12);
 
             if block_end_addr < size { continue; }
@@ -160,7 +160,7 @@ impl InternalBoundaryTagFrameAllocator {
                     remove(self.table_ptr.start.as_ptr(), i_idx as usize, self.table_len as usize);
                     self.table_len -= 1;
                 } else {
-                    (block_start_addr as *mut u32).write(new_available_pages as u32);
+                    unsafe{(block_start_addr as *mut u32).write(new_available_pages as u32)};
                 }
 
                 return last_aligned_addr as *mut u8;
@@ -169,7 +169,7 @@ impl InternalBoundaryTagFrameAllocator {
         null_mut()
     }
 
-    unsafe fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+    pub(crate) unsafe fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
         let size = layout.size();
         let start_addr = (ptr as usize) & !4095;
         let end_addr = (ptr as usize + size + 4095) & !4095;
@@ -179,9 +179,9 @@ impl InternalBoundaryTagFrameAllocator {
 
         let mut i = 0;
         while i < self.table_len {
-            let existing_loc = self.table_ptr.start.as_ptr().add(i as usize).read();
+            let existing_loc = unsafe{self.table_ptr.start.as_ptr().add(i as usize).read()};
             if existing_loc == page_idx + page_count {
-                let existing_size = ((existing_loc as usize) << 12 as *const u32).read();
+                let existing_size = unsafe{(((existing_loc as usize) << 12) as *const u32).read()};
                 page_count += existing_size;
                 remove(self.table_ptr.start.as_ptr(), i as usize, self.table_len as usize);
                 self.table_len -= 1;
@@ -192,12 +192,12 @@ impl InternalBoundaryTagFrameAllocator {
 
         // 上側との合体: page_idx == (loc + len)
         for i in 0..self.table_len {
-            let entry_ptr = self.table_ptr.start.as_ptr().add(i as usize);
-            let loc = entry_ptr.read() as usize;
-            let len = ((loc << 12) as *const u32).read() as usize;
+            let entry_ptr = unsafe{self.table_ptr.start.as_ptr().add(i as usize)};
+            let loc = unsafe{entry_ptr.read() as usize};
+            let len = unsafe{((loc << 12) as *const u32).read()} as usize;
             if page_idx == (loc + len) as u32 {
                 let new_len = len + page_count as usize;
-                ((loc << 12) as *mut u32).write(new_len as u32);
+                unsafe{((loc << 12) as *mut u32).write(new_len as u32)};
                 return;
             }
         }
@@ -205,19 +205,19 @@ impl InternalBoundaryTagFrameAllocator {
         // 挿入位置を探して追加
         let mut insert_idx = 0;
         while insert_idx < self.table_len {
-            let val = self.table_ptr.start.as_ptr().add(insert_idx as usize).read();
+            let val = unsafe{self.table_ptr.start.as_ptr().add(insert_idx as usize).read()};
             if val > page_idx { break; }
             insert_idx += 1;
         }
 
-        ((page_idx as usize) << 12 as *mut u32).write(page_count);
+        unsafe{(((page_idx as usize) << 12) as *mut u32).write(page_count)};
         insert(self.table_ptr.start.as_ptr(), insert_idx as usize, page_idx, self.table_len as usize);
         self.table_len += 1; // 【重要】これを忘れるとエントリが増えません
     }
 
-    unsafe fn alloc_zeroed(&mut self, layout: Layout) -> *mut u8 {
+    pub(crate) unsafe fn alloc_zeroed(&mut self, layout: Layout) -> *mut u8 {
         let size = layout.size();
-        let ptr = self.alloc(layout);
+        let ptr = unsafe{self.alloc(layout)};
 
         if ptr.is_null() {
             return null_mut();
@@ -234,7 +234,7 @@ impl InternalBoundaryTagFrameAllocator {
         ptr
     }
 
-    unsafe fn realloc(&mut self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+    pub(crate) unsafe fn realloc(&mut self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         let old_size = layout.size();
         let old_end = (ptr as usize + old_size + 4095) & !4095;
 
@@ -286,7 +286,7 @@ impl InternalBoundaryTagFrameAllocator {
                             let new_loc = existing_loc + need_pages as u32;
                             let new_size = existing_size - need_pages;
                             entry_ptr.write(new_loc);
-                            ((new_loc as usize) << 12 as *mut u32).write(new_size as u32);
+                            (((new_loc as usize) << 12) as *mut u32).write(new_size as u32);
                         }
                     }
                     return ptr;
@@ -295,20 +295,20 @@ impl InternalBoundaryTagFrameAllocator {
             }
         }
 
-        let new_layout = Layout::from_size_align_unchecked(new_size, layout.align());
-        let new_ptr = self.alloc(new_layout);
-        if !new_ptr.is_null() {
+        let new_layout = unsafe{Layout::from_size_align_unchecked(new_size, layout.align())};
+        let new_ptr = unsafe{self.alloc(new_layout)};
+        if !new_ptr.is_null() { unsafe {
             core::ptr::copy_nonoverlapping(ptr, new_ptr, old_size);
             self.dealloc(ptr, layout);
-        }
+        }}
         new_ptr
     }
 }
 
-pub struct BoundaryTagFrameAllocator(spin::Mutex<InternalBoundaryTagFrameAllocator>);
+pub struct BoundaryTagFrameAllocator(pub(crate) spin::Mutex<InternalBoundaryTagFrameAllocator>);
 
 impl BoundaryTagFrameAllocator {
-    pub fn new(arg_target: MemData) -> Result<(MemData<usize>, Self), Error> {
+    pub fn new(arg_target: MemData<usize>) -> Result<(MemData<usize>, Self), Error> {
         let (data, internal) = InternalBoundaryTagFrameAllocator::new(arg_target)?;
         Ok((data, Self(spin::Mutex::new(internal))))
     }
@@ -316,18 +316,18 @@ impl BoundaryTagFrameAllocator {
 
 unsafe impl GlobalAlloc for BoundaryTagFrameAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.0.lock().alloc(layout)
+        unsafe{self.0.lock().alloc(layout)}
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.0.lock().dealloc(ptr, layout)
+        unsafe{self.0.lock().dealloc(ptr, layout)}
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        self.0.lock().alloc_zeroed(layout)
+        unsafe{self.0.lock().alloc_zeroed(layout)}
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        self.0.lock().realloc(ptr, layout, new_size)
+        unsafe{self.0.lock().realloc(ptr, layout, new_size)}
     }
 }

@@ -11,7 +11,7 @@ pub struct InternalSlab {
 
 impl InternalSlab {
     pub unsafe fn init_at(ptr: *mut u8, slot_size: u32, next: Option<NonNull<InternalSlab>>) -> &'static mut Self {
-        let slab = &mut *(ptr as *mut Self);
+        let slab = unsafe{&mut *(ptr as *mut Self)};
         slab.bitmap = [0, 0];
         slab.slot_size = slot_size;
         slab.next = next;
@@ -29,7 +29,7 @@ impl InternalSlab {
                 let offset = 32 + (slot_idx * self.slot_size as usize);
                 if offset + size <= 4096 {
                     *map |= 1 << first_free;
-                    return Some((self as *mut Self as *mut u8).add(offset));
+                    return unsafe{Some((self as *mut Self as *mut u8).add(offset))};
                 }
             }
         }

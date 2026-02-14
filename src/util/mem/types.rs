@@ -1,31 +1,38 @@
-use num_traits::{Unsigned, PrimInt};
+use core::ops::{Add, Sub};
 
 #[derive(Debug, Clone)]
-pub struct MemMap<T: Unsigned + PrimInt = u64> {
+pub struct MemMap<T = u64> {
     pub start: T,
     pub end: T,
 }
 
-impl<T: Unsigned + PrimInt> From<MemData<T>> for MemMap<T> {
+impl<T> From<MemData<T>> for MemMap<T>
+where
+    T: Clone + Add<Output = T>
+{
     fn from(value: MemData<T>) -> Self {
         Self {
-            start: value.start,
-            end: value.start + value.len,
+            start: value.start.clone(),
+            // 参照ではなく実体が必要なので、startもcloneしてから足す
+            end: value.start.clone() + value.len,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct MemData<T: Unsigned + PrimInt = u64> {
+pub struct MemData<T = u64> {
     pub start: T,
     pub len: T,
 }
 
-impl<T: Unsigned + PrimInt> From<MemMap<T>> for MemData<T> {
+impl<T> From<MemMap<T>> for MemData<T>
+where
+    T: Clone + Sub<Output = T>
+{
     fn from(value: MemMap<T>) -> Self {
         Self {
-            start: value.start,
-            len: value.end - value.start,
+            start: value.start.clone(),
+            len: value.start - value.end,
         }
     }
 }

@@ -108,7 +108,7 @@ pub fn gets_control_character_supported(
 /// * `px` - ピクセルサイズ
 /// * `x` - 開始地点
 /// * `y` - 開始地点
-fn gets_with_obj(analyzed_text: &Vec<u16>, font_obj: &Font,font_bytes: &[u8], text: &str, px: f32, x: i32, y: i32) -> Vec<Text> {
+fn gets_with_obj(analyzed_text: &Vec<u16>, font_obj: &Font, _font_bytes: &[u8], _text: &str, px: f32, x: i32, y: i32) -> Vec<Text> {
     let mut ret = vec![];
     let mut pen_x = x;
 

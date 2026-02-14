@@ -141,15 +141,15 @@ pub unsafe fn read_msr(msr: u32) -> u64 {
 
 #[inline]
 pub unsafe fn cpuid(leaf: u32, sub_leaf: Option<u32>) -> CpuidResult {
-    unsafe{__cpuid_count(leaf, sub_leaf.unwrap_or(0))}
+    __cpuid_count(leaf, sub_leaf.unwrap_or(0))
 }
 
 #[inline]
 pub unsafe fn get_vendor_name() -> String {
-    let res = cpuid(
+    let res = unsafe{cpuid(
         cpuid::common::VIALSFN,
         None
-    );
+    )};
 
     let mut vendor = [0u8; 12];
     vendor[0..4].copy_from_slice(&res.ebx.to_ne_bytes());
@@ -161,7 +161,7 @@ pub unsafe fn get_vendor_name() -> String {
 
 #[inline]
 pub unsafe fn get_cpu_vendor() -> CpuVendor {
-    let res = cpuid(cpuid::common::VIALSFN, None);
+    let res = unsafe{cpuid(cpuid::common::VIALSFN, None)};
 
     match (res.ebx, res.edx, res.ecx) {
         (0x756e6547, 0x49656e69, 0x6c65746e) => CpuVendor::Intel,

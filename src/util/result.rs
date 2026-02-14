@@ -1,4 +1,5 @@
 use alloc::borrow::Cow;
+use alloc::format;
 use alloc::string::String;
 use core::any::type_name;
 use core::fmt::{Display, Formatter};
@@ -75,7 +76,7 @@ impl Error {
     pub fn try_from_uefi(status: uefi::Result, desc: Option<&'static str>) -> core::result::Result<Self, ()> {
         let mut error_type = Error::try_from(status)?;
 
-        error_type.message = desc.map(Cow::Owned);
+        error_type.message = desc.map(Cow::Borrowed);
 
         Ok(error_type)
     }
@@ -92,7 +93,7 @@ impl Error {
     #[inline]
     pub fn external<E: core::fmt::Debug>(err: E) -> Self {
         let msg = type_name::<E>();
-        Self::new(ErrorType::OtherError, Some(msg))
+        Self::new_string(ErrorType::OtherError, Some(format!("{}({:?})", msg, err)))
     }
 }
 
@@ -114,16 +115,10 @@ impl<T: core::fmt::Debug> TryFrom<uefi::Result<T>> for Error {
     }
 }
 
-impl <T: core::error::Error> From<T> for Error {
-    fn from(value: T) -> Self {
-        Self::external(value)
-    }
-}
-
 impl Display for Error {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        match self.message {
+        match &self.message {
             Some(msg) => write!(f, "[{:?}] {}", self.error_type, msg),
             None => write!(f, "[{:?}] (no message)", self.error_type),
         }
