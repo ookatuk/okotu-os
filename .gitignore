@@ -1,6 +1,6 @@
 .idea/
 target/
-ucode/
+contents/ucode/
 esp/
 bin/
 test_os.iso
