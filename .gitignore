@@ -1,7 +1,15 @@
 .idea/
 target/
-ucode/*.bin
-ucode/*.z
 esp/
 bin/
+
+contents/ucode/**/*
+!contents/ucode/
+!contents/ucode/.gitkeep
+
+raw_contents/ucode/**/*
+!raw_contents/ucode/
+!raw_contents/ucode/.gitkeep
+
+
 test_os.iso
