@@ -5,17 +5,20 @@ pub struct InternalSlab {
     bitmap: [u64; 2],
     slot_size: u32,
     pub(crate) next: Option<NonNull<InternalSlab>>,
-    _padding: [u8; 8],
-    data: [u8; 4064],
+    _align_dummy: [u64; 0],
+    data: [u8; 4056],
 }
-
 impl InternalSlab {
     const fn header_size() -> usize {
         core::mem::offset_of!(Self, data)
     }
 
-    pub unsafe fn init_at(ptr: *mut u8, slot_size: u32, next: Option<NonNull<InternalSlab>>) -> &'static mut Self {
-        let slab = unsafe{&mut *(ptr as *mut Self)};
+    pub unsafe fn init_at(
+        ptr: *mut u8,
+        slot_size: u32,
+        next: Option<NonNull<InternalSlab>>,
+    ) -> &'static mut Self {
+        let slab = unsafe { &mut *(ptr as *mut Self) };
         slab.bitmap = [0, 0];
         slab.slot_size = slot_size;
         slab.next = next;
@@ -24,7 +27,9 @@ impl InternalSlab {
 
     pub unsafe fn alloc(&mut self, layout: Layout) -> Option<*mut u8> {
         let size = layout.size();
-        if size > self.slot_size as usize { return None; }
+        if size > self.slot_size as usize {
+            return None;
+        }
 
         for (i, map) in self.bitmap.iter_mut().enumerate() {
             let first_free = (!*map).trailing_zeros();
@@ -33,7 +38,7 @@ impl InternalSlab {
                 let offset = Self::header_size() + (slot_idx * self.slot_size as usize);
                 if offset + size <= 4096 {
                     *map |= 1 << first_free;
-                    return unsafe{Some((self as *mut Self as *mut u8).add(offset))};
+                    return unsafe { Some((self as *mut Self as *mut u8).add(offset)) };
                 }
             }
         }

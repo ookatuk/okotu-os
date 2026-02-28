@@ -1,12 +1,17 @@
-use core::alloc::{GlobalAlloc, Layout};
-use core::ptr::{null_mut, NonNull};
+use crate::log_info;
 use crate::util::mem::types::{MemData, MemMap};
 use crate::util::result::{Error, ErrorType};
+use core::alloc::{GlobalAlloc, Layout};
+use core::ptr::{NonNull, null_mut};
 
 #[inline]
 fn remove<T>(target: *mut T, index: usize, max: usize) {
-    if index >= max { return; }
-    if index == max - 1 { return; }
+    if index >= max {
+        return;
+    }
+    if index == max - 1 {
+        return;
+    }
     unsafe {
         let ptr = target.add(index);
         core::ptr::copy(ptr.add(1), ptr, max - index - 1);
@@ -24,13 +29,16 @@ fn insert<T>(target: *mut T, index: usize, value: T, max: usize) {
 
 pub struct InternalBoundaryTagFrameAllocator {
     pub table_ptr: MemMap<NonNull<u32>>,
-    table_len:  u32,
+    table_len: u32,
 }
 
 impl InternalBoundaryTagFrameAllocator {
     pub fn new(arg_target: MemData<usize>) -> Result<(MemData<usize>, Self), Error> {
         if (arg_target.start & 0xFFF) != 0 || arg_target.len < 8192 {
-            return Err(Error::new(ErrorType::InvalidData, Some("Invalid alignment or size")));
+            return Err(Error::new(
+                ErrorType::InvalidData,
+                Some("Invalid alignment or size"),
+            ));
         }
 
         let manage_pages = (arg_target.len >> 12).min(u32::MAX as usize);
@@ -67,7 +75,7 @@ impl InternalBoundaryTagFrameAllocator {
             Self {
                 table_ptr: MemMap {
                     start: table_ptr,
-                    end: unsafe { table_ptr.add(4096 / core::mem::size_of::<u32>()) }
+                    end: unsafe { table_ptr.add(4096 / core::mem::size_of::<u32>()) },
                 },
                 table_len: 1, // 既に上で1件書き込み済み
             },
@@ -93,15 +101,19 @@ impl InternalBoundaryTagFrameAllocator {
 
     fn is_full(&self) -> bool {
         let max_entries = unsafe {
-            self.table_ptr.end.as_ptr().offset_from(self.table_ptr.start.as_ptr())
+            self.table_ptr
+                .end
+                .as_ptr()
+                .offset_from(self.table_ptr.start.as_ptr())
         } as usize;
 
         self.table_len as usize >= max_entries
     }
 
-
     fn try_add_table_map(&mut self) -> Result<(), Error> {
-        if !self.is_full() { return Ok(()); }
+        if !self.is_full() {
+            return Ok(());
+        }
 
         let table_end_page = (self.table_ptr.end.as_ptr() as usize) >> 12;
 
@@ -111,10 +123,13 @@ impl InternalBoundaryTagFrameAllocator {
             let size = unsafe { ((loc << 12) as *const u32).read() } as usize;
 
             if table_end_page >= loc && table_end_page < (loc + size) {
-
                 unsafe {
                     if size == 1 {
-                        remove(self.table_ptr.start.as_ptr(), i as usize, self.table_len as usize);
+                        remove(
+                            self.table_ptr.start.as_ptr(),
+                            i as usize,
+                            self.table_len as usize,
+                        );
                         self.table_len -= 1;
                     } else if loc == table_end_page {
                         let new_loc = (loc + 1) as u32;
@@ -125,46 +140,94 @@ impl InternalBoundaryTagFrameAllocator {
                     }
 
                     self.table_ptr.end = NonNull::new_unchecked(
-                        self.table_ptr.end.as_ptr().add(4096 / size_of::<u32>())
+                        self.table_ptr.end.as_ptr().add(4096 / size_of::<u32>()),
                     );
                 }
                 return Ok(());
             }
         }
 
-        Err(Error::new(ErrorType::AllocationFailed, Some("Table full: No adjacent free page found")))
+        Err(Error::new(
+            ErrorType::AllocationFailed,
+            Some("Table full: No adjacent free page found"),
+        ))
+    }
+
+    pub fn dump_table(&self) {
+        log_info!(
+            "kernel",
+            "dump",
+            "--- Allocator Table Dump (len: {}) ---",
+            self.table_len
+        );
+
+        for i in 0..self.table_len {
+            unsafe {
+                // 管理簿のエントリ（開始ページ番号）を取得
+                let entry_ptr = self.table_ptr.start.as_ptr().add(i as usize);
+                let start_page = entry_ptr.read();
+
+                // そのページの実体にある「サイズ情報」を取得
+                let actual_addr = (start_page as usize) << 12;
+                // ここで死ぬ可能性があるため、読み取り前にアドレスをチェック
+                if actual_addr == 0 {
+                    log_info!("kernel", "dump", "  [{}] NULL ADDRESS DETECTED!", i);
+                    continue;
+                }
+                let size = (actual_addr as *const u32).read();
+
+                log_info!(
+                    "kernel",
+                    "dump",
+                    "  [{}] PageIdx: {:#X} (Addr: {:#X}) -> Size: {} pages",
+                    i,
+                    start_page,
+                    actual_addr,
+                    size
+                );
+            }
+        }
     }
 
     unsafe fn alloc(&mut self, layout: Layout) -> *mut u8 {
-        let size = (layout.size() + 4095) & !4095;
-        let align = layout.align();
+        // 要求サイズをページ単位(4096)に切り上げ
+        let size_bytes = (layout.size() + 4095) & !4095;
+        let pages_needed = (size_bytes >> 12) as u32;
 
-        for i_idx in 0..self.table_len {
-            let entry_ptr = unsafe{self.table_ptr.start.as_ptr().add(i_idx as usize)};
+        for i in 0..self.table_len {
+            let entry_ptr = self.table_ptr.start.as_ptr().add(i as usize);
+            let start_page = entry_ptr.read();
+            let start_addr = (start_page as usize) << 12;
 
-            let start_page_idx = unsafe{entry_ptr.read()} as usize;
-            let block_start_addr = start_page_idx << 12; // * 4096
+            // 空きブロックの先頭4バイトから現在のページ数を取得
+            let available_pages = (start_addr as *const u32).read();
 
-            let available_pages = unsafe{(block_start_addr as *const u32).read()} as usize;
-            let block_end_addr = block_start_addr + (available_pages << 12);
-
-            if block_end_addr < size { continue; }
-            let limit = block_end_addr - size;
-            let last_aligned_addr = limit & !(align - 1);
-
-            if last_aligned_addr >= block_start_addr {
-                let remaining_bytes = last_aligned_addr - block_start_addr;
-                let new_available_pages = remaining_bytes >> 12;
+            if available_pages >= pages_needed {
+                // 切り出した後の「新しい開始位置」
+                let new_start_page = start_page + pages_needed;
+                let new_available_pages = available_pages - pages_needed;
 
                 if new_available_pages == 0 {
-                    remove(self.table_ptr.start.as_ptr(), i_idx as usize, self.table_len as usize);
+                    // このブロックを使い切ったので管理簿から削除
+                    remove(
+                        self.table_ptr.start.as_ptr(),
+                        i as usize,
+                        self.table_len as usize,
+                    );
                     self.table_len -= 1;
                 } else {
-                    unsafe{(block_start_addr as *mut u32).write(new_available_pages as u32)};
+                    // 残りがある場合、新しい開始位置を管理簿に書き込み、
+                    // その新しい先頭位置に残りページ数を記録する
+                    entry_ptr.write(new_start_page);
+                    let new_start_addr = (new_start_page as usize) << 12;
+                    (new_start_addr as *mut u32).write(new_available_pages);
                 }
 
                 let _ = self.try_add_table_map();
-                return last_aligned_addr as *mut u8;
+
+                // 確保した領域の先頭（start_addr）を返す。
+                // ページ単位なので必ず4096(および8)の倍数になる。
+                return start_addr as *mut u8;
             }
         }
         null_mut()
@@ -180,11 +243,16 @@ impl InternalBoundaryTagFrameAllocator {
 
         let mut i = 0;
         while i < self.table_len {
-            let existing_loc = unsafe{self.table_ptr.start.as_ptr().add(i as usize).read()};
+            let existing_loc = unsafe { self.table_ptr.start.as_ptr().add(i as usize).read() };
             if existing_loc == page_idx + page_count {
-                let existing_size = unsafe{(((existing_loc as usize) << 12) as *const u32).read()};
+                let existing_size =
+                    unsafe { (((existing_loc as usize) << 12) as *const u32).read() };
                 page_count += existing_size;
-                remove(self.table_ptr.start.as_ptr(), i as usize, self.table_len as usize);
+                remove(
+                    self.table_ptr.start.as_ptr(),
+                    i as usize,
+                    self.table_len as usize,
+                );
                 self.table_len -= 1;
                 continue;
             }
@@ -193,12 +261,12 @@ impl InternalBoundaryTagFrameAllocator {
 
         // 上側との合体: page_idx == (loc + len)
         for i in 0..self.table_len {
-            let entry_ptr = unsafe{self.table_ptr.start.as_ptr().add(i as usize)};
-            let loc = unsafe{entry_ptr.read() as usize};
-            let len = unsafe{((loc << 12) as *const u32).read()} as usize;
+            let entry_ptr = unsafe { self.table_ptr.start.as_ptr().add(i as usize) };
+            let loc = unsafe { entry_ptr.read() as usize };
+            let len = unsafe { ((loc << 12) as *const u32).read() } as usize;
             if page_idx == (loc + len) as u32 {
                 let new_len = len + page_count as usize;
-                unsafe{((loc << 12) as *mut u32).write(new_len as u32)};
+                unsafe { ((loc << 12) as *mut u32).write(new_len as u32) };
                 return;
             }
         }
@@ -206,19 +274,32 @@ impl InternalBoundaryTagFrameAllocator {
         // 挿入位置を探して追加
         let mut insert_idx = 0;
         while insert_idx < self.table_len {
-            let val = unsafe{self.table_ptr.start.as_ptr().add(insert_idx as usize).read()};
-            if val > page_idx { break; }
+            let val = unsafe {
+                self.table_ptr
+                    .start
+                    .as_ptr()
+                    .add(insert_idx as usize)
+                    .read()
+            };
+            if val > page_idx {
+                break;
+            }
             insert_idx += 1;
         }
 
-        unsafe{(((page_idx as usize) << 12) as *mut u32).write(page_count)};
-        insert(self.table_ptr.start.as_ptr(), insert_idx as usize, page_idx, self.table_len as usize);
+        unsafe { (((page_idx as usize) << 12) as *mut u32).write(page_count) };
+        insert(
+            self.table_ptr.start.as_ptr(),
+            insert_idx as usize,
+            page_idx,
+            self.table_len as usize,
+        );
         self.table_len += 1; // 【重要】これを忘れるとエントリが増えません
     }
 
     pub(crate) unsafe fn alloc_zeroed(&mut self, layout: Layout) -> *mut u8 {
         let size = layout.size();
-        let ptr = unsafe{self.alloc(layout)};
+        let ptr = unsafe { self.alloc(layout) };
 
         if ptr.is_null() {
             return null_mut();
@@ -235,7 +316,12 @@ impl InternalBoundaryTagFrameAllocator {
         ptr
     }
 
-    pub(crate) unsafe fn realloc(&mut self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+    pub(crate) unsafe fn realloc(
+        &mut self,
+        ptr: *mut u8,
+        layout: Layout,
+        new_size: usize,
+    ) -> *mut u8 {
         let old_size = layout.size();
         let old_end = (ptr as usize + old_size + 4095) & !4095;
 
@@ -253,14 +339,12 @@ impl InternalBoundaryTagFrameAllocator {
                 let surplus_ptr = new_end as *mut u8;
                 let surplus_size = old_end - new_end;
 
-                let surplus_layout = unsafe {
-                    Layout::from_size_align_unchecked(surplus_size, 4096)
-                };
+                let surplus_layout =
+                    unsafe { Layout::from_size_align_unchecked(surplus_size, 4096) };
                 unsafe { self.dealloc(surplus_ptr, surplus_layout) };
             }
             return ptr;
         }
-
 
         // --- 最適化3: 後ろのページを吸収して拡張する ---
         let old_end_page = (old_end >> 12) as u32;
@@ -281,7 +365,11 @@ impl InternalBoundaryTagFrameAllocator {
                     // --- 吸収成功！ ---
                     unsafe {
                         if existing_size == need_pages {
-                            remove(self.table_ptr.start.as_ptr(), i as usize, self.table_len as usize);
+                            remove(
+                                self.table_ptr.start.as_ptr(),
+                                i as usize,
+                                self.table_len as usize,
+                            );
                             self.table_len -= 1;
                         } else {
                             let new_loc = existing_loc + need_pages as u32;
@@ -296,12 +384,14 @@ impl InternalBoundaryTagFrameAllocator {
             }
         }
 
-        let new_layout = unsafe{Layout::from_size_align_unchecked(new_size, layout.align())};
-        let new_ptr = unsafe{self.alloc(new_layout)};
-        if !new_ptr.is_null() { unsafe {
-            core::ptr::copy_nonoverlapping(ptr, new_ptr, old_size);
-            self.dealloc(ptr, layout);
-        }}
+        let new_layout = unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) };
+        let new_ptr = unsafe { self.alloc(new_layout) };
+        if !new_ptr.is_null() {
+            unsafe {
+                core::ptr::copy_nonoverlapping(ptr, new_ptr, old_size);
+                self.dealloc(ptr, layout);
+            }
+        }
         new_ptr
     }
 }
@@ -317,19 +407,19 @@ impl BoundaryTagFrameAllocator {
 
 unsafe impl GlobalAlloc for BoundaryTagFrameAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe{self.0.lock().alloc(layout)}
+        unsafe { self.0.lock().alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe{self.0.lock().dealloc(ptr, layout)}
+        unsafe { self.0.lock().dealloc(ptr, layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        unsafe{self.0.lock().alloc_zeroed(layout)}
+        unsafe { self.0.lock().alloc_zeroed(layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        unsafe{self.0.lock().realloc(ptr, layout, new_size)}
+        unsafe { self.0.lock().realloc(ptr, layout, new_size) }
     }
 }
 

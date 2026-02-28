@@ -1,6 +1,8 @@
+[resolver]
+version = "2"
+
 [build]
 target = "x86_64-unknown-uefi"
-
 
 [target.x86_64-unknown-uefi]
 rustflags = [
@@ -9,7 +11,10 @@ rustflags = [
     "-C", "target-cpu=x86-64-v2",
     "-C", "no-redzone=y",
     "-C", "panic=abort",
-    "-C", "force-frame-pointers=yes",
+    "-C", "no-stack-check",
 ]
 
 runner = "sh ./scripts/run.sh"
+
+[unstable]
+build-std = ["core", "alloc"]

@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
 const VERSION: &str = "1.0.0";
 
 /// OSプロトコルバージョン.
@@ -21,46 +22,15 @@ const GUI_WAIT: usize = 2_000_000;
 
 const PANICED_TO_RESTART_TIME: usize = 20;
 
-const ALLOW_RATIOS: &[(usize, usize)] = &[
-    (21, 9),
-    (32, 9),
-    (16, 9),
-    (16, 10),
-    (4, 3),
-    (3, 2),
-    (5, 4),
-];
+const ALLOW_RATIOS: &[(usize, usize)] =
+    &[(21, 9), (32, 9), (16, 9), (16, 10), (4, 3), (3, 2), (5, 4)];
 
-const MAIN_FONT: &'static[u8]  = include_bytes!("../assets/ZeroveItalic.ttf");
+const MAIN_FONT: &'static [u8] = include_bytes!("../assets/ZeroveItalic.ttf");
 
 unsafe extern "C" {
     static __ImageBase: u8;
 }
 
-use alloc::boxed::Box;
-use alloc::string::{ToString};
-use alloc::vec;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
-use core::alloc::Layout;
-use core::arch::{asm, naked_asm};
-use core::ffi::c_void;
-use core::hint::spin_loop;
-use core::panic::PanicInfo;
-use core::ptr::{addr_of, null_mut, NonNull};
-use core::time::Duration;
-use spin::{Once, RwLock};
-use bitflags::bitflags;
-use fontdue::Font;
-use num_traits::Zero;
-use serde::Deserialize;
-use uefi::{boot, entry, Event};
-use uefi::boot::{set_image_handle, TimerTrigger};
-use uefi_raw::Status;
-use uefi_raw::table::boot::{EventType, Tpl};
-use util::result;
-use x86_64::instructions::interrupts;
-use x86_64::instructions::interrupts::without_interrupts;
 use crate::manager::display_manager::DisplayManager;
 use crate::manager::load_task_manager::LoadTaskManager;
 use crate::manager::memory_manager::MemoryManager;
@@ -68,24 +38,46 @@ use crate::util::mem::allocator::main::OsAllocator;
 use crate::util::result::Error;
 use crate::util::timer::TSC;
 use acpi;
+use alloc::boxed::Box;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
+use bitflags::bitflags;
+use core::alloc::Layout;
+use core::arch::{asm, naked_asm};
+use core::ffi::c_void;
+use core::hint::spin_loop;
+use core::panic::PanicInfo;
+use core::ptr::{NonNull, addr_of, null_mut};
+use core::time::Duration;
+use fontdue::Font;
+use num_traits::Zero;
+use serde::Deserialize;
+use spin::{Once, RwLock};
+use uefi::boot::{TimerTrigger, set_image_handle};
 use uefi::table::set_system_table;
+use uefi::{Event, boot, entry};
+use uefi_raw::Status;
+use uefi_raw::table::boot::{EventType, Tpl};
 use uefi_raw::table::system::SystemTable;
+use util::result;
+use x86_64::instructions::interrupts;
+use x86_64::instructions::interrupts::without_interrupts;
 
-extern crate alloc;
-
-mod fonts;
 mod cpu;
-mod io;
-mod rng;
+mod fonts;
 mod fs;
-mod util;
+mod io;
 mod manager;
+mod rng;
+mod util;
 
 #[global_allocator]
 /// 物理/仮想アロケーター.
 pub static ALLOC: OsAllocator = OsAllocator::new();
 
-bitflags!{
+bitflags! {
     #[derive(Debug)]
     pub struct State: u8 {
         const DEST = 1 << 0;
@@ -157,7 +149,6 @@ struct Main {
     memory_manager: MemoryManager,
 }
 
-
 impl Main {
     fn init_font(&self) -> result::Result<()> {
         let new_font = Box::new(fonts::load_font(MAIN_FONT));
@@ -172,14 +163,20 @@ impl Main {
     fn frist_init(&self) -> Vec<result::Result> {
         let mut ret = vec![];
 
-        self.display_manager.global_font.call_once(||{self.global_font.clone()});
-        self.load_task_manager.do_parent.call_once(|| {self.display_manager.do_parent.clone()});
+        self.display_manager
+            .global_font
+            .call_once(|| self.global_font.clone());
+        self.load_task_manager
+            .do_parent
+            .call_once(|| self.display_manager.do_parent.clone());
 
         let ltm = Arc::clone(&self.load_task_manager);
 
-        self.do_fn.call_once(||{ltm.get_add_func()});
+        self.do_fn.call_once(|| ltm.get_add_func());
 
-        self.memory_manager.do_fn.call_once(||{self.do_fn.get().unwrap().clone()});
+        self.memory_manager
+            .do_fn
+            .call_once(|| self.do_fn.get().unwrap().clone());
 
         ret.push(|| -> result::Result {
             interrupts::without_interrupts(|| {
@@ -192,7 +189,7 @@ impl Main {
         ret.push(cpu::mitigation::ucode::load());
 
         ret.push(self.init_font());
-        
+
         ret.push(self.display_manager.init_gop());
 
         ret.push(self.display_manager.start_load_grap());
@@ -223,19 +220,16 @@ impl Main {
 
         let stack_bottom = stack_top - stack_len;
 
-        if unsafe{*(stack_bottom as *mut u64)} != 0x5555_AAAA_5555_AAAA {
-            unsafe{asm!(
-                "out dx, al",
-                in("dx") 0x3f8_u16,
-                in("al") b'\xFF',
-                options(nomem, nostack, preserves_flags)
-            )};
-            unsafe{
+        if unsafe { *(stack_bottom as *mut u64) } != 0x5555_AAAA_5555_AAAA {
+            unsafe {
                 asm!(
-                    "ud2",
-                    options(noreturn)
+                    "out dx, al",
+                    in("dx") 0x3f8_u16,
+                    in("al") b'\xFF',
+                    options(nomem, nostack, preserves_flags)
                 )
             };
+            unsafe { asm!("ud2", options(noreturn)) };
         }
     }
 
@@ -250,7 +244,9 @@ impl Main {
 
         let stack_bottom = stack_top - stack_len;
 
-        unsafe { *(stack_bottom as *mut u64) = 0x5555_AAAA_5555_AAAA; }
+        unsafe {
+            *(stack_bottom as *mut u64) = 0x5555_AAAA_5555_AAAA;
+        }
 
         let self_ptr = NonNull::new(core::ptr::addr_of!(*self) as *mut c_void);
 
@@ -262,13 +258,15 @@ impl Main {
                 Tpl::NOTIFY,
                 Some(Self::check_canaria),
                 self_ptr,
-            ).unwrap()
+            )
+            .unwrap()
         };
 
-        Error::try_raise(uefi::boot::set_timer(
-            &event,
-            TimerTrigger::Periodic(100_000),
-        ), Some("failed to set timer periodic event.")).unwrap();
+        Error::try_raise(
+            uefi::boot::set_timer(&event, TimerTrigger::Periodic(100_000)),
+            Some("failed to set timer periodic event."),
+        )
+        .unwrap();
 
         log_info!("kernel", "canaria", "created.");
     }
@@ -285,11 +283,14 @@ impl Main {
 
             log_info!("kernel", "thread safe", "creating gs...");
 
-            let idt_stack = alloc::alloc::alloc(Layout::from_size_align(stack_len as usize, 16).unwrap());
+            let idt_stack =
+                alloc::alloc::alloc(Layout::from_size_align(stack_len as usize, 16).unwrap());
 
             assert!(!idt_stack.is_null());
 
-            util::mem::thread_safe::init_gs(null_mut(), idt_stack.add(stack_len as usize));
+            unsafe {
+                util::mem::thread_safe::init_gs(null_mut(), idt_stack.add(stack_len as usize))
+            };
 
             log_info!("kernel", "thread safe", "created gs");
         }
@@ -300,27 +301,45 @@ impl Main {
 
         for (i, ret) in res.iter().enumerate() {
             if !ret.is_err() {
-                continue
+                continue;
             }
 
             if i == 3 {
                 ret.clone().expect("Failed to get GOP data");
             } else if i == 1 {
-                log_warn!("kernel", "security", "failed to attach micro code: {}", ret.clone().unwrap_err().to_string());
+                log_warn!(
+                    "kernel",
+                    "security",
+                    "failed to attach micro code: {}",
+                    ret.clone().unwrap_err().to_string()
+                );
             } else {
-                log_warn!("kernel", "kernel", "any failed(number: {}): {}", i, ret.clone().unwrap_err().to_string());
+                log_warn!(
+                    "kernel",
+                    "kernel",
+                    "any failed(number: {}): {}",
+                    i,
+                    ret.clone().unwrap_err().to_string()
+                );
             }
         }
 
         self.do_fn.get().unwrap()();
 
-        self.memory_manager.init_memory().expect("failed to init memory system.");
+        self.memory_manager
+            .init_memory()
+            .expect("failed to init memory system.");
 
         log_info!("kernel", "main", "exiting uefi...");
 
         self.do_fn.get().unwrap()();
         {
-            let event = self.display_manager.gop_uefi_event.get().unwrap().unsafe_clone();
+            let event = self
+                .display_manager
+                .gop_uefi_event
+                .get()
+                .unwrap()
+                .unsafe_clone();
 
             let _ = boot::close_event(event).expect("failed to close grap event");
 
@@ -336,11 +355,13 @@ impl Main {
 }
 
 mod _internal_init {
+    use crate::cpu::utils;
+    use crate::{
+        DEBUG_PROTOCOL_VERSION, ENABLE_DEBUG, Main, VERSION, cpu, io, log_custom, log_debug, util,
+    };
     use core::alloc::Layout;
     use core::ptr;
     use uefi::runtime;
-    use crate::{cpu, io, log_custom, log_debug, util, Main, DEBUG_PROTOCOL_VERSION, ENABLE_DEBUG, VERSION};
-    use crate::cpu::utils;
 
     #[inline(always)]
     pub unsafe extern "C" fn init_dep() {
@@ -361,7 +382,9 @@ mod _internal_init {
 
         let tsc = unsafe { core::arch::x86_64::_rdtsc() as usize };
 
-        let time_val = runtime::get_time().map(|t| t.nanosecond() as usize).unwrap_or(0);
+        let time_val = runtime::get_time()
+            .map(|t| t.nanosecond() as usize)
+            .unwrap_or(0);
 
         entropy ^ tsc ^ time_val
     }
@@ -369,19 +392,25 @@ mod _internal_init {
     #[inline(always)]
     pub unsafe extern "C" fn debug_hand() {
         log_custom!("s", "ds", "a", "");
-        log_custom!("s", "ds", "d", "{}", if ENABLE_DEBUG {1} else {0});
+        log_custom!("s", "ds", "d", "{}", if ENABLE_DEBUG { 1 } else { 0 });
         log_custom!("s", "ds", "v", "{}", VERSION);
         log_custom!("s", "ds", "pv", "{}", DEBUG_PROTOCOL_VERSION);
 
         if ENABLE_DEBUG {
-            log_debug!("debug", "cpu vendor", "{}, 0x{:x}", unsafe{cpu::utils::get_vendor_name()}, unsafe { utils::cpuid(cpu::utils::cpuid::common::PIAFB, None) }.eax);
+            log_debug!(
+                "debug",
+                "cpu vendor",
+                "{}, 0x{:x}",
+                unsafe { cpu::utils::get_vendor_name() },
+                unsafe { utils::cpuid(cpu::utils::cpuid::common::PIAFB, None) }.eax
+            );
         }
     }
 
     #[inline(always)]
     pub unsafe extern "C" fn allocate(target: *mut u64) {
         let entropy = (get_boot_entropy() % 65536) & !0xf;
-        let stack_size = 1024 * 20;
+        let stack_size = 1024 * 64;
         let main_size = size_of::<Main>();
         let main_align = align_of::<Main>();
 
@@ -415,63 +444,73 @@ mod _internal_init {
 #[unsafe(export_name = "efi_main")]
 pub extern "efiapi" fn efi_main(_head: uefi::Handle, _table: *const c_void) -> ! {
     naked_asm!(
-        "endbr64",
+        "endbr64",                  // for CFG (Control Flow Guard) instructions
 
-        "xor rbx, rbx",
-        "mov gs, bx",
+                                    // let rbx: *const u64;
+                                    // let r12: *const u64;
+                                    // let rdx: *const u64;
 
-        "sub rsp, 56",
-        "mov r12, rdx",
-        "call {set_handle}",
+                                    // let mut rcx: *const u64 = _head .addr()
+                                    // let mut rdx: *const u64 = _table.addr()
 
-        "mov rcx, r12",
-        "call {set_table}",
+                                    // let mut rsp: *mut u8    = get_stack_pointer!().addr()
+                                    // let mut gs : *const u16 = get_gs_register!().addr()
 
-        "call {init_dep}",
-        "call {debug_hand_shake}",
+        "xor rbx, rbx",             // rbx: *const u64  = 0
+        "mov gs, bx",               // gs : *const u16  = rbx as u16
 
-        "lea rcx, [rsp + 32]",
+        "sub rsp, 56",              // rsp: *mut u8    -= 56  // reserve 56-byte stack frame above current rsp
 
-        "call {allocate}",
+        "mov r12, rdx",             // r12: *const u64  = rdx
+        "call {set_handle}",        // set_handle(rcx) // rcx to ?
 
-        "mov rdx, [rsp + 32]", // 2 rsp(stack top) -> stack_top (rdx 2)
-        "mov rcx, [rsp + 40]", // 1 struct         -> &self     (rcx 1)
-        "mov r8, [rsp + 48]",  // 3 stack_len      -> stack_len (r8 3)
+        "mov rcx, r12",             // rcx: *const u64  = r12
+        "call {set_table}",         // set_table(rcx)  // rcx to ?
 
-        "lea rsp, [rdx - 48]",
+        "call {init_dep}",          // init_dep()
 
-        "jmp {main}",
+        "call {debug_hand_shake}",  // call_hand_shake()
 
+        "lea rcx, [rsp + 32]",      // rcx: *const u64  = rsp.add(32) as u64
+
+        "call {allocate}",          // allocate(rcx)  // rcx to ?
+                                    // rcx.add(0)       = u64  // stack_top
+                                    // rcx.add(1)       = u64  // *mut Main
+                                    // rcx.add(2)       = u64  // stack_len
+
+        "mov rdx, [rsp + 32]",      // rdx: &u64        = rsp.add(32)  // stack_top
+        "mov rcx, [rsp + 40]",      // rcx: &u64        = rsp.add(40)  // &Self
+        "mov r8, [rsp + 48]",       // r8 : &u64        = rsp.add(48)  // stack_len
+
+        "and rdx, -16",             // rdx: *const u64 &= -16  // 16-bytes align
+
+        "lea rsp, [rdx - 32]",      // rsp: *mut u8     = (rdx - 32) as *mut _ // move to new stack and reserve 32-byte stack
+
+        "jmp {main}",               // main(rcx as &Main, rdx, r8)  // main(rcx: &Main, rdx: u64, r8: u64) -> !
         init_dep = sym _internal_init::init_dep,
         debug_hand_shake = sym _internal_init::debug_hand,
-        allocate = sym _internal_init::allocate, // stack_top, struct, stack_len
-        main = sym Main::main, // &self, stack_top, stack_len
+        allocate = sym _internal_init::allocate,
+        main = sym Main::main,
         set_handle = sym set_image_handle,
         set_table = sym set_system_table,
     )
 }
 
 #[panic_handler]
+#[cfg(not(test))]
 fn panic(info: &PanicInfo) -> ! {
     let message = info.to_string();
     let loc = info.location().unwrap().to_string();
 
     log_last!("kernel", "panic", "{}\n{}", loc, message);
-    log_last!("kernel", "panic", "A critical system error has occurred. System will restart in {} seconds. for system admin: (info: {}, by: {})", PANICED_TO_RESTART_TIME, info.message(), info.location().unwrap());
-
-    unsafe {
-        let mut rbp: *const usize;
-
-        asm!("mov {}, rbp", out(reg) rbp);
-
-        while !rbp.is_null() {
-            let ret_addr = *rbp.add(1); // rbpのすぐ上が戻り先アドレス
-            log_last!("kernel", "stack trace", "Call at: {:#x}", ret_addr);
-
-            rbp = *rbp as *const usize; // 前のrbpを辿る
-            if rbp.is_null() || (rbp as usize) == 0 { break; }
-        }
-    }
+    log_last!(
+        "kernel",
+        "panic",
+        "A critical system error has occurred. System will restart in {} seconds. for system admin: (info: {}, by: {})",
+        PANICED_TO_RESTART_TIME,
+        info.message(),
+        info.location().unwrap()
+    );
 
     loop {
         spin_loop()

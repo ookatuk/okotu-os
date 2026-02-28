@@ -1,8 +1,8 @@
+use crate::cpu;
 use alloc::boxed::Box;
 use core::arch::asm;
 use core::ops::{Deref, DerefMut};
 use core::ptr::addr_of;
-use crate::cpu;
 
 #[repr(Rust, align(16))]
 #[derive(Debug, Default)]
@@ -16,12 +16,12 @@ pub struct Gs {
     pub self_ptr: u64,
     pub app_stack: u64,
     pub kernel_stack: u64,
-    main_data: GsMainData,  // カプセル化
+    main_data: GsMainData, // カプセル化
 }
 
 impl Deref for Gs {
     type Target = GsMainData;
-    
+
     #[inline]
     fn deref(&self) -> &Self::Target {
         &self.main_data
@@ -35,7 +35,6 @@ impl DerefMut for Gs {
     }
 }
 
-
 #[inline]
 pub fn get_mut() -> Option<&'static mut Gs> {
     let mut ptr: *mut Gs = core::ptr::null_mut();
@@ -43,9 +42,9 @@ pub fn get_mut() -> Option<&'static mut Gs> {
         asm!(
             "mov {tmp:e}, gs",
             "test {tmp:e}, {tmp:e}",
-            "jz 1f",
+        "jz 2f",
             "mov {tmp}, gs:[0]",
-            "1f:",
+        "2:",
             "endbr64",
             tmp = inout(reg) ptr,
             options(nostack, readonly, preserves_flags)
@@ -62,12 +61,14 @@ pub unsafe fn init_gs(app_stack: *const u8, kernel_stack: *const u8) {
     });
 
     let ptr = Box::leak(gs);
-    unsafe{ptr.self_ptr = addr_of!(ptr).addr() as u64};
+    unsafe { ptr.self_ptr = addr_of!(ptr).addr() as u64 };
 
-    unsafe{cpu::utils::write_msr(
-        cpu::utils::msr::common::GS_BASE,
-        addr_of!(ptr).addr() as u64
-    )};
+    unsafe {
+        cpu::utils::write_msr(
+            cpu::utils::msr::common::GS_BASE,
+            addr_of!(ptr).addr() as u64,
+        )
+    };
 
     unsafe {
         asm!(

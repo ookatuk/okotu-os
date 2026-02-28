@@ -14,10 +14,24 @@ fn main() {
         binary_name, host_target
     );
 
-    // 2. Build for host OS
+    let build_temp_dir = env::temp_dir().join("ookatuks_os_log_viewer_build");
+
     let status = Command::new("cargo")
-        .args(&["build", "--release", "--target", &host_target])
-        .current_dir(&external_dir)
+        .env_clear() // 親の環境変数を全消し
+        .env("PATH", env::var("PATH").unwrap())
+        .env("HOME", env::var("HOME").unwrap())
+        .env("RUSTFLAGS", "")
+        .args(&[
+            "build",
+            "--release",
+            "--target",
+            &host_target,
+            "--manifest-path",
+            external_dir.join("Cargo.toml").to_str().unwrap(),
+            "--target-dir",
+            build_temp_dir.to_str().unwrap(),
+        ])
+        .current_dir("/")
         .status()
         .expect("Failed to execute cargo build command");
 
@@ -30,8 +44,8 @@ fn main() {
     } else {
         ""
     };
-    let binary_path = external_dir
-        .join("target")
+
+    let binary_path = build_temp_dir
         .join(&host_target)
         .join("release")
         .join(format!("{}{}", binary_name, exe_ext));

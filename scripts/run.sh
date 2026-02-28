@@ -12,6 +12,7 @@ cd "$RUNING_DIR" || return
 sh "$SCRIPT_DIR/internal_init_script.sh"
 
 EFI_PATH=$1
+shift
 
 mkfifo "$WORKSPACE_ROOT/serial_pipe.in" "$WORKSPACE_ROOT/serial_pipe.out"
 
@@ -29,8 +30,9 @@ qemu-system-x86_64 \
   -device virtio-gpu-pci \
   -display gtk,gl=on \
   -machine q35 -m 16G -enable-kvm -cpu host \
-  -no-reboot -no-shutdown -smp 2
+  -no-reboot -no-shutdown -smp 2 \
+  "$@"
 
-kill $VIEWER_PID
+wait $VIEWER_PID
 
 rm -f "$WORKSPACE_ROOT/serial_pipe.in" "$WORKSPACE_ROOT/serial_pipe.out"

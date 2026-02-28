@@ -1,7 +1,7 @@
+use crate::cpu::utils;
 use alloc::string::String;
 use core::arch::asm;
-use core::arch::x86_64::{CpuidResult, __cpuid_count};
-use crate::cpu::utils;
+use core::arch::x86_64::{__cpuid_count, CpuidResult};
 
 #[derive(Debug, Clone)]
 pub enum CpuVendor {
@@ -62,7 +62,6 @@ pub mod msr {
     }
 }
 
-
 pub mod cpuid {
     pub mod common {
         /// Processor Info and Feature Bits
@@ -74,12 +73,9 @@ pub mod cpuid {
 
     #[cfg(target_arch = "x86_64")]
     pub mod x64 {
-        pub mod intel {
+        pub mod intel {}
 
-        }
-
-        pub mod amd {
-        }
+        pub mod amd {}
 
         pub mod v1 {
             #[allow(unused_imports)]
@@ -117,28 +113,31 @@ pub mod cpuid {
     }
 }
 
-
 #[inline]
 pub unsafe fn write_msr(target: u32, value: u64) {
-    unsafe{asm!(
-        "wrmsr",
-        in("ecx") target,
-        in("eax") value & 0xFFFF_FFFF,
-        in("edx") value >> 32,
-        options(nostack, preserves_flags, nomem)
-    )};
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") target,
+            in("eax") value & 0xFFFF_FFFF,
+            in("edx") value >> 32,
+            options(nostack, preserves_flags, nomem)
+        )
+    };
 }
 
 #[inline]
 pub unsafe fn read_msr(msr: u32) -> u64 {
     let (low, high): (u32, u32);
-    unsafe{asm!(
-        "rdmsr",
-        in("ecx") msr,
-        out("eax") low,
-        out("edx") high,
-        options(nostack, preserves_flags, nomem)
-    )};
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") low,
+            out("edx") high,
+            options(nostack, preserves_flags, nomem)
+        )
+    };
 
     ((high as u64) << 32) | (low as u64)
 }
@@ -150,10 +149,7 @@ pub unsafe fn cpuid(leaf: u32, sub_leaf: Option<u32>) -> CpuidResult {
 
 #[inline]
 pub unsafe fn get_vendor_name() -> String {
-    let res = unsafe{cpuid(
-        cpuid::common::VIALSFN,
-        None
-    )};
+    let res = unsafe { cpuid(cpuid::common::VIALSFN, None) };
 
     let mut vendor = [0u8; 12];
     vendor[0..4].copy_from_slice(&res.ebx.to_ne_bytes());
@@ -165,7 +161,7 @@ pub unsafe fn get_vendor_name() -> String {
 
 #[inline]
 pub unsafe fn get_cpu_vendor() -> CpuVendor {
-    let res = unsafe{cpuid(cpuid::common::VIALSFN, None)};
+    let res = unsafe { cpuid(cpuid::common::VIALSFN, None) };
 
     match (res.ebx, res.edx, res.ecx) {
         (0x756e6547, 0x49656e69, 0x6c65746e) => CpuVendor::Intel,
@@ -176,20 +172,39 @@ pub unsafe fn get_cpu_vendor() -> CpuVendor {
 
 #[inline]
 pub fn who_am_i() -> u32 {
-    let res = unsafe { cpuid(cpuid::x64::v2::X2_APIC_ID, None) };
-    if res.ebx != 0 {
-        return res.edx;
+    let gs = crate::util::mem::thread_safe::get_mut();
+    if let Some(gs) = &gs
+        && gs.cpu_id != 0
+    {
+        return gs.cpu_id;
     }
 
-    let res = unsafe { cpuid(cpuid::common::PIAFB, None) };
-    (res.ebx >> 24) & 0xFF
+    let mut ret = 0;
+
+    let res = unsafe { cpuid(cpuid::x64::v2::X2_APIC_ID, None) };
+    if res.ebx != 0 {
+        ret = res.edx;
+    }
+
+    if ret == 0 {
+        let res = unsafe { cpuid(cpuid::common::PIAFB, None) };
+        ret = (res.ebx >> 24) & 0xFF;
+    }
+
+    if gs.is_some() {
+        unsafe { gs.unwrap_unchecked() }.cpu_id = ret;
+    }
+
+    ret
 }
 
 #[inline]
 pub unsafe fn get_reversion(typ: CpuVendor) -> u32 {
-    unsafe{match typ {
-        CpuVendor::Intel => (utils::read_msr(0x8B) >> 32) as u32,
-        CpuVendor::Amd => utils::read_msr(0x8B) as u32,
-        _ => 0,
-    }}
+    unsafe {
+        match typ {
+            CpuVendor::Intel => (utils::read_msr(0x8B) >> 32) as u32,
+            CpuVendor::Amd => utils::read_msr(0x8B) as u32,
+            _ => 0,
+        }
+    }
 }
