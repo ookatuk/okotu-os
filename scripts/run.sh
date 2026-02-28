@@ -15,7 +15,7 @@ EFI_PATH=$1
 
 mkfifo "$WORKSPACE_ROOT/serial_pipe.in" "$WORKSPACE_ROOT/serial_pipe.out"
 
-"$WORKSPACE_ROOT/log_viewer_bin" < "$WORKSPACE_ROOT/serial_pipe.out" &
+"$WORKSPACE_ROOT/bin/log_viewer" < "$WORKSPACE_ROOT/serial_pipe.out" &
 VIEWER_PID=$!
 
 mkdir -p "$WORKSPACE_ROOT/esp/EFI/BOOT"
