@@ -2,5 +2,5 @@
 target/
 ucode/
 esp/
-log_viewer
+log_viewer_bin
 test_os.iso

@@ -1,0 +1,3 @@
+[submodule "log_viewer"]
+	path = log_viewer
+	url = https://github.com/ookatuk/log_viewer
