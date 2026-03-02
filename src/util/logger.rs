@@ -1,43 +1,54 @@
+use crate::io::console::serial::SERIAL1;
+use crate::util::timer::TSC;
 use alloc::borrow::Cow;
+use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::fmt::{Display};
+use core::cmp::max;
+use core::fmt::Display;
 use core::panic::Location;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use serde::Serialize;
-use spin::{Lazy, Once, RwLock};
+use spin::{Lazy, Once, RwLock, RwLockWriteGuard};
 use x86_64::instructions::interrupts;
-use crate::io::console::serial::SERIAL1;
-use crate::util::timer::TSC;
 
-const LOG_CAPACITY: usize = 5000;
+pub static LOG_CAPACITY: AtomicUsize = AtomicUsize::new(5000);
 
-pub(crate) static LOG_BUF: Lazy<RwLock<Vec<Arc<OsLog>>>> = Lazy::new(|| {
-    RwLock::new(Vec::with_capacity(LOG_CAPACITY))
+pub(crate) static LOG_BUF: Lazy<RwLock<VecDeque<Arc<OsLog>>>> = Lazy::new(|| {
+    RwLock::new(VecDeque::with_capacity(LOG_CAPACITY.load(Ordering::SeqCst)))
 });
-
-static LOG_TIMER: Once<Arc<RwLock<TSC>>> = Once::new();
-
-pub fn init_timer(timer: Arc<RwLock<TSC>>) {
-    LOG_TIMER.call_once(|| {timer});
-}
 
 static LOG_HEAD_ID: AtomicUsize = AtomicUsize::new(0); // 0番目の要素の通算ID
 
-pub fn add_log(data: OsLog) {
-    interrupts::without_interrupts(|| {
-        let shared = Arc::new(data);
+pub fn add_log(data: &OsLog) {
+    let log = Arc::new(OsLog {
+        level: data.level,
+        by: data.by,
+        tag: data.tag,
+        data: data.data.clone(),
+        file: data.file,
+        time: data.time,
+        line: data.line,
+        column: data.column,
+        cpu_acpi_id: data.cpu_acpi_id,
+    });
 
+    interrupts::without_interrupts(|| {
         let mut lock = LOG_BUF.write();
 
-        if lock.len() >= LOG_CAPACITY {
+        let cap = LOG_CAPACITY.load(Ordering::SeqCst);
+
+        if cap == 0 {
+            return;
+        }
+
+        if lock.len() == cap {
             lock.remove(0);
             LOG_HEAD_ID.fetch_add(1, Ordering::SeqCst);
         }
 
-        lock.push(shared);
-
+        lock.push_back(log);
     })
 }
 
@@ -140,9 +151,9 @@ pub fn _custom(level: &'static str, by: &'static str, tag: &'static str, text: c
 #[derive(Serialize, Clone)]
 #[repr(C)]
 pub struct OsLog {
-    pub level: Cow<'static, str>,
-    pub by: Cow<'static, str>,
-    pub tag: Cow<'static, str>,
+    pub level: &'static str,
+    pub by: &'static str,
+    pub tag: &'static str,
     pub data: String,
     pub file: &'static str,
     pub time: u64,
@@ -173,28 +184,29 @@ impl OsLog {
     }
 }
 
+#[inline]
 pub fn custom_internal(level: &'static str, by: &'static str, tag: &'static str, text: core::fmt::Arguments, loc: &'static Location) {
     _real_custom_internal(level, by, tag, text, loc);
 }
 
+
 pub fn _real_custom_internal(level: &'static str, by: &'static str, tag: &'static str, text: core::fmt::Arguments, loc: &'static Location) {
     let mut time = 0;
 
-    if let Some(a) = LOG_TIMER.get() {
-        if let Some(tsc) = a.try_read() {
-            if let Some(clock) = tsc.clock_in_100ms.as_ref() {
-                let tsc_per_ms = clock.get() / 100;
+    unsafe {
+        let tsc = TSC.read();
+        if let Some(clock) = tsc.clock_in_100ms.as_ref() {
+            let tsc_per_ms = clock.get() / 100;
 
-                time = tsc.now_clock() / tsc_per_ms;
-            }
+            time = tsc.now_clock() / tsc_per_ms;
         }
     }
 
     let data = OsLog {
         time,
-        level: Cow::Borrowed(level),
-        by: Cow::Borrowed(by),
-        tag: Cow::Borrowed(tag),
+        level,
+        by,
+        tag,
         data: text.to_string(),
 
         file: loc.file(),
@@ -203,8 +215,11 @@ pub fn _real_custom_internal(level: &'static str, by: &'static str, tag: &'stati
 
         cpu_acpi_id: crate::cpu::utils::who_am_i(),
     };
+
+    add_log(&data);
+
     let a = bincode::serde::encode_to_vec(
-        data.clone(),
+        data,
         bincode::config::standard()
     );
 
@@ -215,7 +230,7 @@ pub fn _real_custom_internal(level: &'static str, by: &'static str, tag: &'stati
             lk.send_raw(0xBB);
             lk.send_raw(0xCC);
             lk.send_raw(0xEE);
-            for i in ((data.len()+0) as u32).to_le_bytes() {
+            for i in (data.len() as u32).to_le_bytes() {
                 lk.send_raw(i);
             }
             for i in data {
@@ -223,6 +238,4 @@ pub fn _real_custom_internal(level: &'static str, by: &'static str, tag: &'stati
             }
         })
     }
-
-    add_log(data);
 }

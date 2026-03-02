@@ -1,5 +1,5 @@
-use core::ops::{Deref, DerefMut};
 use core::alloc::Layout;
+use core::ops::{Deref, DerefMut};
 
 pub struct RangePtr {
     ptr: *mut u8,

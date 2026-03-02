@@ -1,8 +1,8 @@
 use crate::log_info;
-use crate::util::mem::types::{MemData, MemMap};
+use crate::mem::types::{MemData, MemMap};
 use crate::util::result::{Error, ErrorType};
 use core::alloc::{GlobalAlloc, Layout};
-use core::ptr::{NonNull, null_mut};
+use core::ptr::{null_mut, NonNull};
 
 #[inline]
 fn remove<T>(target: *mut T, index: usize, max: usize) {

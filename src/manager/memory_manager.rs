@@ -1,6 +1,6 @@
-use crate::util::mem::allocator::main::HybridAllocator;
-use crate::util::mem::map::{MemMapping, MemoryMapType};
-use crate::util::mem::types::{MemData, MemMap};
+use crate::mem::allocator::main::HybridAllocator;
+use crate::mem::map::{MemMapping, MemoryMapType};
+use crate::mem::types::{MemData, MemMap};
 use crate::util::result;
 use crate::util::result::{Error, ErrorType};
 use crate::{log_debug, log_info};
@@ -109,13 +109,13 @@ impl MemoryManager {
         Ok(())
     }
 
-    pub fn create_tmp_allocator(&self) -> result::Result {
+    pub fn create_tmp_allocator(&self, size: usize) -> result::Result {
         log_info!(
             "kernel",
             "memory",
             "allocating new allocator management memory"
         );
-        let layout = Layout::from_size_align(FIRST_ALLOC, 4096).unwrap();
+        let layout = Layout::from_size_align(size, 4096).unwrap();
 
         let allocated = unsafe { alloc::alloc::alloc_zeroed(layout) };
 
@@ -124,7 +124,7 @@ impl MemoryManager {
 
         let map = MemData {
             start: allocated.addr(),
-            len: FIRST_ALLOC,
+            len: size,
         };
 
         self.create_memory_map()?;
@@ -173,15 +173,15 @@ impl MemoryManager {
         Ok(())
     }
 
-    pub unsafe fn init_memory(&self) -> result::Result {
-        self.create_tmp_allocator()?;
+    pub unsafe fn init_memory(&self, size: Option<usize>) -> result::Result {
+        self.create_tmp_allocator(size.unwrap_or(FIRST_ALLOC))?;
         self.create_memory_map()?;
 
         log_info!(
             "kernel",
             "information",
             "From now on, until the full allocator is complete, logging will be low due to memory limitations. (the temp global allocator has only {}MB available)",
-            FIRST_ALLOC / 1024 / 1024
+            size.unwrap_or(FIRST_ALLOC) / 1024 / 1024
         );
 
         let allocator = self.internal_init_mem_tmp_alloc.write().take().unwrap();
@@ -191,6 +191,11 @@ impl MemoryManager {
         self.do_fn.get().unwrap()();
 
         log_info!("kernel", "information", "changed allocator.");
+
+        Ok(())
+    }
+
+    pub unsafe fn add_alloc(&self) -> result::Result {
         log_info!("kernel", "allocator", "creating full allocators...");
 
         self.add_allocators()?;

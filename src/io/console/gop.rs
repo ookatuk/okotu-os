@@ -1,11 +1,12 @@
+use crate::util::result::{Error, ErrorType};
+use crate::{log_debug, log_info, result};
+use crate::ALLOW_RATIOS;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use uefi::boot::ScopedProtocol;
 use uefi::proto::console::gop::{BltOp, GraphicsOutput, PixelFormat};
 use uefi_raw::protocol::console::PixelBitmask;
-use crate::{log_debug, log_info, result};
-use crate::{ALLOW_RATIOS};
-use crate::util::result::{Error, ErrorType};
+use x86_64::instructions::interrupts::without_interrupts;
 
 fn scale_f32_to_mask(intensity: f32, mask: u32) -> u32 {
     if mask == 0 { return 0; }
@@ -129,6 +130,43 @@ impl GopData {
         self.mask = info.pixel_bitmask();
 
         Ok(())
+    }
+
+    pub fn get_good_mode(&mut self) -> result::Result {
+        let mut target: Option<(usize, usize, uefi::proto::console::gop::Mode)> = None;
+
+        log_debug!("kernel", "gop", "getting good gop modes...");
+
+        without_interrupts(|| -> result::Result {
+            let gop = self.gop.get_mut().unwrap();
+
+            for mode in gop.modes() {
+                let info = mode.info();
+                let (w, h) = info.resolution();
+
+                if let Some((level, _)) = ALLOW_RATIOS.iter().enumerate().find(|&(_, &(rw, rh))| w * rh == h * rw) {
+                    let is_better = if let Some((best_w, best_level, _)) = target {
+                        // レベルが低い（優先度が高い）か、同じレベルで幅が広い場合
+                        level < best_level || (level == best_level && w > best_w)
+                    } else {
+                        true
+                    };
+
+                    if is_better {
+                        target = Some((w, level, mode));
+                    }
+                }
+            }
+
+            log_debug!("kernel", "gop", "setting goog modes...");
+
+            if let Some((_, _, mode)) = target {
+                Error::try_raise(gop.set_mode(&mode), Some("Failed to set video mode"))?;
+            }
+
+            Ok(())
+        })?;
+        self.update()
     }
 
     #[inline]
@@ -280,35 +318,6 @@ unsafe impl Send for GopData {}
 unsafe impl Sync for GopData {}
 
 pub fn get_gop(mut gop: ScopedProtocol<GraphicsOutput>) -> result::Result<GopData> {
-    let mut target: Option<(usize, usize, uefi::proto::console::gop::Mode)> = None;
-
-    log_debug!("kernel", "gop", "getting good gop modes...");
-
-    for mode in gop.modes() {
-        let info = mode.info();
-        let (w, h) = info.resolution();
-
-        if let Some((level, _)) = ALLOW_RATIOS.iter().enumerate().find(|&(_, &(rw, rh))| w * rh == h * rw) {
-
-            let is_better = if let Some((best_w, best_level, _)) = target {
-                // レベルが低い（優先度が高い）か、同じレベルで幅が広い場合
-                level < best_level || (level == best_level && w > best_w)
-            } else {
-                true
-            };
-
-            if is_better {
-                target = Some((w, level, mode));
-            }
-        }
-    }
-
-    log_debug!("kernel", "gop", "setting goog modes...");
-
-    if let Some((_, _, mode)) = target {
-        Error::try_raise(gop.set_mode(&mode), Some("Failed to set video mode"))?;
-    }
-
     log_debug!("kernel", "gop", "creating gop struct...");
 
     let info = gop.current_mode_info();

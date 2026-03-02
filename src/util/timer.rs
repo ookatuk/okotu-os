@@ -1,21 +1,30 @@
-use core::num::{NonZeroU64};
-use core::time::Duration;
-use x86_64::instructions::interrupts::without_interrupts;
 use crate::util::result;
 use crate::util::result::{Error, ErrorType};
+use core::hint::spin_loop;
+use core::num::NonZeroU64;
+use core::time::Duration;
+use spin::RwLock;
+use x86_64::instructions::interrupts::without_interrupts;
+
+pub static TSC: RwLock<Tsc> = RwLock::new(Tsc::new());
 
 #[derive(Debug, Default)]
-pub struct TSC {
+pub struct Tsc {
     pub clock_in_100ms: Option<NonZeroU64>,
 }
 
-impl TSC {
-    pub fn new() -> Self {
-        TSC { clock_in_100ms: None }
+impl Tsc {
+    pub const fn new() -> Self {
+        Tsc { clock_in_100ms: None }
     }
 
     #[inline]
     pub fn now_clock(&self) -> u64 {
+        Self::now_clock_()
+    }
+
+    #[inline]
+    pub fn now_clock_() -> u64 {
         unsafe { core::arch::x86_64::_rdtsc() }
     }
 
@@ -40,6 +49,18 @@ impl TSC {
                 ErrorType::DeviceError,
                 Some("100ms clock is zero")
             ).raise()
+        }
+    }
+
+    pub fn spin_loop(&self, time: Duration) {
+        let start = self.now_clock();
+
+        let hz = self.clock_in_100ms.unwrap().get() * 10;
+
+        let ticks_to_wait = (time.as_nanos() * hz as u128 / 1_000_000_000) as u64;
+
+        while self.now_clock().wrapping_sub(start) < ticks_to_wait {
+            spin_loop();
         }
     }
 }

@@ -1,8 +1,8 @@
+use crate::mem::types::MemMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use uefi::mem::memory_map::{MemoryMap, MemoryMapOwned};
-use uefi_raw::table::boot::{MemoryType};
-use crate::util::mem::types::MemMap;
+use uefi_raw::table::boot::MemoryType;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum MemoryMapType {

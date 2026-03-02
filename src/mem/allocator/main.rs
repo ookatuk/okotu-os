@@ -1,11 +1,11 @@
-use crate::util::mem::allocator::frame_boundary_tag::BoundaryTagFrameAllocator;
-use crate::util::mem::allocator::slab::InternalSlab;
-use crate::util::mem::allocator::uefi_allocator::LockedAllocator;
-use crate::util::mem::types::MemData;
+use crate::mem::allocator::frame_boundary_tag::BoundaryTagFrameAllocator;
+use crate::mem::allocator::slab::InternalSlab;
+use crate::mem::allocator::uefi_allocator::LockedAllocator;
+use crate::mem::types::MemData;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
-use core::ptr::{NonNull, null_mut};
+use core::ptr::{null_mut, NonNull};
 use spin::Once;
 use x86_64::instructions::interrupts::without_interrupts;
 

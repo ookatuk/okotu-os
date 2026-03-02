@@ -1,3 +1,8 @@
+use crate::fonts::Text;
+use crate::io::console::gop::Color;
+use crate::util::result;
+use crate::util::result::Error;
+use crate::{fonts, io, log_custom, log_debug, log_info, util, BAR_HEIGHT, BAR_MARGIN, GUI_WAIT, MAIN_FONT};
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -13,15 +18,10 @@ use spin::{Once, RwLock};
 use uefi::boot::TimerTrigger;
 use uefi::proto::console::gop;
 use uefi::{runtime, Event};
-use uefi_raw::Status;
 use uefi_raw::table::boot::{EventType, Tpl};
 use uefi_raw::table::runtime::ResetType;
+use uefi_raw::Status;
 use x86_64::instructions::interrupts;
-use crate::{fonts, io, log_custom, log_debug, log_info, util, BAR_HEIGHT, BAR_MARGIN, GUI_WAIT, MAIN_FONT};
-use crate::fonts::Text;
-use crate::io::console::gop::Color;
-use crate::util::result;
-use crate::util::result::Error;
 
 #[derive(Debug, Default)]
 struct LogCache {
@@ -134,14 +134,14 @@ impl DisplayManager {
                             let lock = util::logger::LOG_BUF.read();
 
                             // 文字列の取得。Stringを保持する必要があるため一旦作成
-                            let raw_msg = match lock.last() {
+                            let raw_msg = match lock.iter().last() {
                                 Some(log) => log.to_short_string(),
                                 None => "funny info: If shown errors, it is error.".to_string(),
                             };
 
-                            match lock.last() {
+                            match lock.iter().last() {
                                 Some(log) => {
-                                    me.last_log.lock().last_level = log.level.clone()
+                                    me.last_log.lock().last_level = Cow::Borrowed(log.level);
                                 }
                                 None => {
 

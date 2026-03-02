@@ -3,7 +3,7 @@ pub mod types;
 use crate::cpu::mitigation::ucode::types::{AmdEquivTableEntry, AmdPatchHeader, IntelUcodeHeader};
 use crate::cpu::utils;
 use crate::cpu::utils::{CpuVendor, get_reversion};
-use crate::util::mem::smart_ptr::RangePtr;
+use crate::mem::smart_ptr::RangePtr;
 use crate::util::result;
 use crate::util::result::{Error, ErrorType};
 use crate::{fs, log_debug, log_info, log_trace, log_warn};
@@ -303,10 +303,8 @@ unsafe fn find_good_file(vendor_enum: CpuVendor) -> result::Result<RangePtr> {
 
             let required_len = target.len() + 1;
 
-            // 実際に「長さ」を確保する。これでスライスとして見えるようになる。
             tmp_buf.resize(required_len, 0u16);
 
-            // tmp_buf全体をスライスとして渡す
             let a = CStr16::from_str_with_buf(&target, tmp_buf.as_mut_slice());
 
             if let Some(err) = a.err() {
@@ -314,29 +312,30 @@ unsafe fn find_good_file(vendor_enum: CpuVendor) -> result::Result<RangePtr> {
                     ErrorType::InvalidData,
                     Some(format!("Cpu Vendor Name is Bad ({})", err)),
                 )
-                .raise();
+                    .raise();
             }
             let a = unsafe { a.unwrap_unchecked() };
 
             let res = ucode_dir.open(a, FileMode::Read, FileAttribute::READ_ONLY)?;
-            let data = res.into_regular_file();
-            if data.is_none() {
-                return Error::new(ErrorType::InvalidFileType, Some("Not a file")).raise();
+
+            if let Some(data) = res.into_regular_file() {
+                target_path = Some(data);
+                break;
             }
-            target_path = Some(data.unwrap());
-            break;
         }
 
-        if target_path.is_none() {
+        target_path
+    };
+
+    if target_path.is_none() {
             return Error::new(
                 ErrorType::NotSupported,
                 Some("No matching files were found."),
             )
             .raise();
-        }
+    }
 
-        unsafe { target_path.unwrap_unchecked() }
-    };
+    let mut target_path = unsafe { target_path.unwrap_unchecked() };
 
     let size: Box<FileInfo> = target_path.get_boxed_info()?;
     let size = size.file_size();

@@ -8,6 +8,7 @@ _internal_debug = ["debug-mode"]
 
 disable-check = []
 debug-mode = []
+lldb_debug = []
 
 [dependencies]
 uefi = { version = "0.36.1", features = ["alloc", "logger"], default-features = false }
@@ -25,6 +26,7 @@ x86_64 = { version = "0.15.4", features = ["instructions", "nightly"] }
 libm = { version = "0.2.16", default-features = false, features = ["arch"] }
 uart_16550 = { version = "0.4.0", default-features = false, features = ["stable"] }
 acpi = "6.1.0"
+itertools = "0.14.0"
 
 [profile.dev]
 panic = "abort"
