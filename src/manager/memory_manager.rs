@@ -7,6 +7,7 @@ use crate::{log_debug, log_info};
 use alloc::sync::Arc;
 use alloc::vec;
 use core::alloc::Layout;
+use core::num::NonZeroUsize;
 use core::ptr::addr_of;
 use spin::{Once, RwLock};
 use uefi::mem::memory_map::{MemoryMap, MemoryMapOwned};
@@ -173,15 +174,21 @@ impl MemoryManager {
         Ok(())
     }
 
-    pub unsafe fn init_memory(&self, size: Option<usize>) -> result::Result {
-        self.create_tmp_allocator(size.unwrap_or(FIRST_ALLOC))?;
+    pub unsafe fn init_memory(&self, size: Option<NonZeroUsize>) -> result::Result {
+        let size = if let Some(item) = size {
+            item.get()
+        } else {
+            FIRST_ALLOC
+        };
+
+        self.create_tmp_allocator(size)?;
         self.create_memory_map()?;
 
         log_info!(
             "kernel",
             "information",
             "From now on, until the full allocator is complete, logging will be low due to memory limitations. (the temp global allocator has only {}MB available)",
-            size.unwrap_or(FIRST_ALLOC) / 1024 / 1024
+            size / 1024 / 1024
         );
 
         let allocator = self.internal_init_mem_tmp_alloc.write().take().unwrap();

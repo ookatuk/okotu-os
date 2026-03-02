@@ -20,6 +20,8 @@ pub enum ErrorType {
     InternalError,
     UefiBroken,
     DeviceError,
+    ReadError,
+    NotAFile,
 }
 
 impl From<uefi::Error> for ErrorType {

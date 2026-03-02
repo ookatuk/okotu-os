@@ -4,18 +4,36 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-_internal_debug = ["debug-mode"]
+default = ["enable_uart_outputs", "enable_normal_safety_checks", "enable_systemctl_arg_checks", "include_boot_option_to_memcheck"]
 
-disable-check = []
-debug-mode = []
-lldb_debug = []
+features_enable_debug_mode = ["enable_debug_outputs", "enable_debug_level_outputs"]
+
+enable_debug_outputs = []
+enable_debug_level_outputs = []
+
+enable_lldb_debug = []
+
+enable_ligatures = ["rustybuzz"]
+
+include_boot_option_to_memcheck = ["enable_boot_option"]
+
+enable_boot_option = []
+
+enable_uart_outputs = ["bincode", "uart_16550"]
+
+enable_essential_safety_checks = []
+enable_required_safety_checks = ["enable_essential_safety_checks"]
+
+enable_normal_safety_checks = ["enable_required_safety_checks"]
+
+enable_systemctl_arg_checks = []
 
 [dependencies]
 uefi = { version = "0.36.1", features = ["alloc", "logger"], default-features = false }
 uefi-raw = "0.13.0"
-bincode = { version = "2.0.1", default-features = false, features = ["alloc", "serde"] }
+bincode = { version = "2.0.1", default-features = false, features = ["alloc", "serde"], optional = true }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
-rustybuzz = { version = "0.20.1", default-features = false }
+rustybuzz = { version = "0.14.1", default-features = false, features = ["libm"], optional = true }
 spin = "0.10.0"
 bitflags = "2.10.0"
 miniz_oxide = { version = "0.9.0", default-features = false, features = ["with-alloc"] }
@@ -24,19 +42,22 @@ num-traits = {version = "0.2.19", default-features = false }
 serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
 x86_64 = { version = "0.15.4", features = ["instructions", "nightly"] }
 libm = { version = "0.2.16", default-features = false, features = ["arch"] }
-uart_16550 = { version = "0.4.0", default-features = false, features = ["stable"] }
-acpi = "6.1.0"
-itertools = "0.14.0"
+uart_16550 = { version = "0.4.0", default-features = false, features = ["stable"], optional = true }
+acpi = { version = "6.1.0", default-features = false, features = ["alloc", "aml"] }
+itertools = { version = "0.14.0", default-features = false, features = ["use_alloc"] }
 
 [profile.dev]
-panic = "abort"
 opt-level = 1
 overflow-checks = true
 debug = 2
 debug-assertions = true
+lto = "thin"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
 
 [profile.release]
-panic = "abort"
 lto = "fat"
 codegen-units = 1
 opt-level = "z"

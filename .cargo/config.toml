@@ -12,6 +12,9 @@ rustflags = [
     "-C", "target-cpu=x86-64-v2",
     "-C", "no-redzone=y",
     "-C", "panic=abort",
+    "-C", "code-model=kernel",
+    "-C", "link-arg=-z",
+    "-C", "link-arg=/ALIGN:4096",
 ]
 
 runner = "sh ./scripts/run.sh"

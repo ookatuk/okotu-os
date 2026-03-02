@@ -7,11 +7,7 @@ const VERSION: &str = "1.0.0";
 /// OSプロトコルバージョン.
 const DEBUG_PROTOCOL_VERSION: &str = "1.0";
 
-const ENABLE_DEBUG: bool = true;
-
 const LINE_SPACING: f32 = 1.5;
-
-const ENABLE_LIGATURES: bool = true;
 
 const MAX_DO_ITEM: usize = 1000;
 
@@ -25,7 +21,7 @@ const PANICED_TO_RESTART_TIME: usize = 20;
 const ALLOW_RATIOS: &[(usize, usize)] =
     &[(21, 9), (32, 9), (16, 9), (16, 10), (4, 3), (3, 2), (5, 4)];
 
-const MAIN_FONT: &'static [u8] = include_bytes!("../assets/ZeroveItalic.ttf");
+static MAIN_FONT: Once<Box<[u8]>> = Once::new();
 
 unsafe extern "C" {
     static __ImageBase: u8;
@@ -37,10 +33,8 @@ use crate::manager::load_task_manager::LoadTaskManager;
 use crate::manager::memory_manager::MemoryManager;
 use crate::mem::allocator::main::OsAllocator;
 use crate::mem::map::MemoryMapType;
-use crate::mem::types::MemData;
 use crate::util::result::Error;
-use crate::util::timer::{Tsc, TSC};
-use acpi;
+use crate::util::timer::{TSC};
 use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -49,13 +43,14 @@ use alloc::vec::Vec;
 use bitflags::bitflags;
 use core::alloc::Layout;
 use core::arch::{asm, naked_asm};
+use core::cell::OnceCell;
 use core::cmp::PartialEq;
 use core::ffi::c_void;
 use core::hint::spin_loop;
+use core::num::NonZeroUsize;
 use core::panic::PanicInfo;
-use core::ptr::{addr_of, null_mut, NonNull};
+use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::Ordering;
-use core::time::Duration;
 use fontdue::Font;
 use num_traits::Zero;
 use serde::Deserialize;
@@ -98,8 +93,9 @@ bitflags! {
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum BootMode {
     Normal,
-    MemCheck,
     Reboot,
+    #[cfg(feature = "include_boot_option_to_memcheck")]
+    MemCheck,
 }
 
 #[derive(Debug)]
@@ -166,7 +162,11 @@ struct Main {
 
 impl Main {
     fn init_font(&self) -> result::Result<()> {
-        let new_font = Box::new(fonts::load_font(MAIN_FONT));
+        let font = fonts::load()?;
+
+        MAIN_FONT.call_once(|| { font });
+
+        let new_font = Box::new(fonts::load_font(unsafe { MAIN_FONT.get_unchecked() }));
         interrupts::without_interrupts(|| {
             let mut a = self.global_font.write();
             *a = Some(*new_font);
@@ -206,6 +206,7 @@ impl Main {
         ret
     }
 
+    #[cfg(feature = "enable_required_safety_checks")]
     pub extern "efiapi" fn check_canaria(_event: uefi::Event, context: Option<NonNull<c_void>>) {
         let me = unsafe { &*(context.unwrap().as_ptr() as *const Main) };
 
@@ -232,16 +233,17 @@ impl Main {
         if unsafe { *(stack_bottom as *mut u64) } != 0x5555_AAAA_5555_AAAA {
             unsafe {
                 asm!(
-                    "out dx, al",
-                    in("dx") 0x3f8_u16,
-                    in("al") b'\xFF',
-                    options(nomem, nostack, preserves_flags)
+                "out dx, al",
+                in("dx") 0x3f8_u16,
+                in("al") b'\xFF',
+                options(nomem, nostack, preserves_flags)
                 )
             };
             unsafe { asm!("ud2", options(noreturn)) };
         }
     }
 
+    #[cfg(feature = "enable_required_safety_checks")]
     fn enable_stack_canaria(&self) {
         log_info!("kernel", "canaria", "creating stack canaria");
         let (stack_top, stack_len) = without_interrupts(|| {
@@ -268,14 +270,14 @@ impl Main {
                 Some(Self::check_canaria),
                 self_ptr,
             )
-            .unwrap()
+                .unwrap()
         };
 
         Error::try_raise(
             uefi::boot::set_timer(&event, TimerTrigger::Periodic(100_000)),
             Some("failed to set timer periodic event."),
         )
-        .unwrap();
+            .unwrap();
 
         log_info!("kernel", "canaria", "created.");
     }
@@ -299,10 +301,11 @@ impl Main {
 
         pr(cstr16!("--- Boot Menu ---\r\n"))?;
         pr(cstr16!("1. Normal Boot\r\n"))?;
-        pr(cstr16!("2. Memory Check (Built-in)\r\n"))?;
-        pr(cstr16!("3. Reboot\r\n"))?;
+        pr(cstr16!("2. Reboot\r\n"))?;
+        #[cfg(feature = "include_boot_option_to_memcheck")]
+        pr(cstr16!("3. Memory Check (Built-in)\r\n"))?;
         pr(cstr16!("-----------------\r\n"))?;
-        pr(cstr16!("Select [1-3]: "))?;
+        pr(cstr16!("Select: "))?;
         let mode = loop {
             boot::wait_for_event(&mut [st_i.wait_for_key_event().unwrap()]).unwrap();
 
@@ -312,6 +315,7 @@ impl Main {
 
                 match c {
                     '1' => break BootMode::Normal,
+                    #[cfg(feature = "include_boot_option_to_memcheck")]
                     '2' => break BootMode::MemCheck,
                     '3' => break BootMode::Reboot,
                     _ => continue
@@ -322,10 +326,11 @@ impl Main {
         Ok(mode)
     }
 
+    #[cfg(feature = "include_boot_option_to_memcheck")]
     fn memcheck(&self) -> ! {
         log_info!("kernel", "memcheck", "memory check started. It will take some time.");
 
-        let default = util::logger::LOG_CAPACITY.load(Ordering::SeqCst);;
+        let default = util::logger::LOG_CAPACITY.load(Ordering::SeqCst);
         util::logger::LOG_CAPACITY.store(0, Ordering::SeqCst);
 
         let _ = uefi::boot::set_watchdog_timer(0, 0, None);
@@ -492,12 +497,13 @@ impl Main {
                 lock.len = stack_len as usize;
             });
 
+            #[cfg(feature = "enable_required_safety_checks")]
             self.enable_stack_canaria();
 
             log_info!("kernel", "thread safe", "creating gs...");
 
             let idt_stack =
-                alloc::alloc::alloc(Layout::from_size_align(stack_len as usize, 16).unwrap());
+                unsafe{alloc::alloc::alloc(Layout::from_size_align(stack_len as usize, 16).unwrap())};
 
             assert!(!idt_stack.is_null());
 
@@ -510,47 +516,58 @@ impl Main {
 
         let res = self.frist_init();
 
-        log_info!("kernel", "main", "checking results");
 
-        for (i, ret) in res.iter().enumerate() {
-            if !ret.is_err() {
-                continue;
-            }
+        #[cfg(feature = "enable_essential_safety_checks")]
+        {
+            log_info!("kernel", "main", "checking results");
 
-            if i == 3 {
-                ret.clone().expect("Failed to get GOP data");
-            } else if i == 1 {
-                log_warn!(
-                    "kernel",
-                    "security",
-                    "failed to attach micro code: {}",
-                    ret.clone().unwrap_err().to_string()
-                );
-            } else {
-                log_warn!(
-                    "kernel",
-                    "kernel",
-                    "any failed(number: {}): {}",
-                    i,
-                    ret.clone().unwrap_err().to_string()
-                );
+            for (i, ret) in res.iter().enumerate() {
+                if !ret.is_err() {
+                    continue;
+                }
+
+                if i == 3 || i == 2 {
+                    ret.clone().expect("Failed to Required subjects (graphic)");
+                } else if i == 1 {
+                    log_warn!(
+                        "kernel",
+                        "security",
+                        "failed to attach micro code: {}",
+                        ret.clone().unwrap_err().to_string()
+                    );
+                } else {
+                    log_warn!(
+                        "kernel",
+                        "kernel",
+                        "any failed(number: {}): {}",
+                        i,
+                        ret.clone().unwrap_err().to_string()
+                    );
+                }
             }
         }
+        #[cfg(not(feature = "enable_essential_safety_checks"))]
+        let _ = res;
 
         self.do_fn.get().unwrap()();
 
-        log_info!("kernel", "main", "getting boot mode");
+        #[cfg(feature = "enable_boot_option")]
+        let mode = {
+            log_info!("kernel", "main", "getting boot mode");
 
-        let mode = self.get_boot_mode().expect("Failed to get boot mode");
+            let mode = self.get_boot_mode().expect("Failed to get boot mode");
 
-        if mode == BootMode::Reboot {
-            log_info!("kernel", "kernel", "rebooting");
-            uefi::runtime::reset(
-                ResetType::COLD,
-                Status::SUCCESS,
-                None,
-            );
-        }
+            if mode == BootMode::Reboot {
+                log_info!("kernel", "kernel", "rebooting");
+                uefi::runtime::reset(
+                    ResetType::COLD,
+                    Status::SUCCESS,
+                    None,
+                );
+            }
+
+            mode
+        };
 
         self.do_fn.get().unwrap()();
 
@@ -563,9 +580,31 @@ impl Main {
 
         self.do_fn.get().unwrap()();
 
-        let size = if mode == BootMode::MemCheck {
-            Some(102 * 1024 * 1024)
-        } else { None };
+        #[cfg(feature = "enable_boot_option")]
+        let (size, should_add_alloc) = {
+            let size = {
+                #[cfg(feature = "include_boot_option_to_memcheck")]
+                if mode == BootMode::MemCheck {
+                    Some(unsafe { NonZeroUsize::new_unchecked(50 * 1024 * 1024) })
+                } else {
+                    None
+                }
+                #[cfg(not(feature = "include_boot_option_to_memcheck"))]
+                None
+            };
+
+            let should_add_alloc = {
+                #[cfg(feature = "include_boot_option_to_memcheck")]
+                { size.is_none() }
+                #[cfg(not(feature = "include_boot_option_to_memcheck"))]
+                { true }
+            };
+
+            (size, should_add_alloc)
+        };
+        #[cfg(not(feature = "enable_boot_option"))]
+        let (size, should_add_alloc) = (None, true);
+
 
         log_info!("kernel", "main", "initing memory...");
 
@@ -574,13 +613,14 @@ impl Main {
                 .init_memory(size)
                 .expect("failed to init memory system.");
 
-            if size.is_none() {
+            if should_add_alloc {
                 self.memory_manager.add_alloc()
                     .expect("failed to init memory system.");
             }
         };
 
-        if size.is_some() {
+        #[cfg(feature = "enable_boot_option")]
+        if !should_add_alloc {
             log_info!("kernel", "main", "memory check required. starting memory check...");
             self.memcheck();
         }
@@ -592,10 +632,10 @@ impl Main {
         {
             let event = unsafe {
                 self
-                .display_manager
-                .gop_uefi_event
-                .get()
-                .unwrap()
+                    .display_manager
+                    .gop_uefi_event
+                    .get()
+                    .unwrap()
                     .unsafe_clone()
             };
 
@@ -616,17 +656,18 @@ impl Main {
 mod _internal_init {
     use crate::cpu::utils;
     use crate::{
-        cpu, io, log_custom, log_debug, util, Main, DEBUG_PROTOCOL_VERSION, ENABLE_DEBUG, VERSION,
+        cpu, io, log_custom, log_debug, util, Main, DEBUG_PROTOCOL_VERSION, VERSION,
     };
     use core::alloc::Layout;
     use core::ptr;
     use uefi::runtime;
 
-    #[cfg(feature = "lldb_debug")]
+    #[cfg(feature = "enable_lldb_debug")]
     use core::arch::asm;
 
     #[inline(always)]
     pub unsafe extern "C" fn init_dep() {
+        #[cfg(feature = "enable_uart_outputs")]
         io::console::serial::init_serial();
         uefi::helpers::init().expect("Failed to init uefi helpers");
     }
@@ -653,16 +694,16 @@ mod _internal_init {
 
     #[inline(always)]
     pub unsafe extern "C" fn debug_hand() {
-        if cfg!(feature = "lldb_debug") {
+        if cfg!(feature = "enable_lldb_debug") {
             unsafe { core::arch::asm!("int3"); }
         }
 
         log_custom!("s", "ds", "a", "");
-        log_custom!("s", "ds", "d", "{}", if ENABLE_DEBUG || cfg!(feature = "debug-mode") { 1 } else { 0 });
+        log_custom!("s", "ds", "d", "{}", if cfg!(any(feature = "enable_debug_outputs", feature = "enable_debug_level_outputs")) { 1 } else { 0 });
         log_custom!("s", "ds", "v", "{}", VERSION);
         log_custom!("s", "ds", "pv", "{}", DEBUG_PROTOCOL_VERSION);
 
-        if cfg!(feature = "debug-mode") || ENABLE_DEBUG {
+        if cfg!(feature = "enable_debug_outputs") {
             log_debug!(
                 "debug",
                 "cpu vendor",
@@ -706,7 +747,6 @@ mod _internal_init {
 }
 
 #[unsafe(naked)]
-#[unsafe(no_mangle)]
 #[unsafe(export_name = "efi_main")]
 pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *const c_void) -> ! {
     // Generally, the way arguments and return values are handled is called the "ABI",
@@ -729,7 +769,7 @@ pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *const c_void) ->
     naked_asm!(
         "endbr64",                  // cet::allow_jump() //for CET (Control-flow Enforcement Technology) instructions
 
-                                    // let rbx: *const u64;
+                                    // let eax: *const u64;
                                     // let r12: *const u64;
                                     // let rdx: *const u64;
 
@@ -742,8 +782,8 @@ pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *const c_void) ->
                                     //     let mut gs : *const u16 = get_gs_register!().addr()
                                     // ```
 
-        "xor rbx, rbx",             // rbx: *const u64  = 0
-        "mov gs, bx",               // gs : *const u16  = rbx as u16
+        "xor eax, eax",             // eax: *const u64  = 0
+        "mov gs, ax",               // gs : *const u16  = eax as u16
 
         "sub rsp, 56",              // rsp: *mut u8    -= 56  // reserve 56-byte stack frame above current rsp
 

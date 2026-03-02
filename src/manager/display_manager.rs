@@ -155,11 +155,11 @@ impl DisplayManager {
                                     Arc::clone(&lk.cache)
                                 } else {
                                     // 新しいログなのでラスタライズ実行
-                                    let analyzed = fonts::analyze_text(font, MAIN_FONT, &raw_msg);
+                                    let analyzed = fonts::analyze_text(font, unsafe{MAIN_FONT.get_unchecked()}, &raw_msg);
                                     let data = fonts::gets_with_obj(
                                         &analyzed,
                                         font,
-                                        MAIN_FONT,
+                                        unsafe{MAIN_FONT.get_unchecked()},
                                         &raw_msg,
                                         16.0,
                                         bar_x as i32,

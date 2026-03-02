@@ -1,3 +1,4 @@
+#[cfg(feature = "enable_uart_outputs")]
 use crate::io::console::serial::SERIAL1;
 use crate::util::timer::TSC;
 use alloc::borrow::Cow;
@@ -114,12 +115,12 @@ macro_rules! log_custom {
 
 #[macro_export]
 macro_rules! log_trace {
-    ($by:expr,$tag:expr,$($text:tt)*) => { if cfg!(feature = "debug-mode") {$crate::log_custom!("trace", $by, $tag, $($text)*)} };
+    ($by:expr,$tag:expr,$($text:tt)*) => { if cfg!(feature = "enable_debug_level_outputs") {$crate::log_custom!("trace", $by, $tag, $($text)*)} };
 }
 
 #[macro_export]
 macro_rules! log_debug {
-    ($by:expr,$tag:expr,$($text:tt)*) => { if cfg!(feature = "debug-mode") {$crate::log_custom!("debug", $by, $tag, $($text)*)} };
+    ($by:expr,$tag:expr,$($text:tt)*) => { if cfg!(feature = "enable_debug_level_outputs") {$crate::log_custom!("debug", $by, $tag, $($text)*)} };
 }
 
 #[macro_export]
@@ -218,24 +219,27 @@ pub fn _real_custom_internal(level: &'static str, by: &'static str, tag: &'stati
 
     add_log(&data);
 
-    let a = bincode::serde::encode_to_vec(
-        data,
-        bincode::config::standard()
-    );
+    #[cfg(feature = "enable_uart_outputs")]
+    {
+        let a = bincode::serde::encode_to_vec(
+            data,
+            bincode::config::standard()
+        );
 
-    if let Ok(data) = a {
-        interrupts::without_interrupts(|| {
-            let mut lk = SERIAL1.lock();
-            lk.send_raw(0xAA);
-            lk.send_raw(0xBB);
-            lk.send_raw(0xCC);
-            lk.send_raw(0xEE);
-            for i in (data.len() as u32).to_le_bytes() {
-                lk.send_raw(i);
-            }
-            for i in data {
-                lk.send_raw(i);
-            }
-        })
+        if let Ok(data) = a {
+            interrupts::without_interrupts(|| {
+                let mut lk = SERIAL1.lock();
+                lk.send_raw(0xAA);
+                lk.send_raw(0xBB);
+                lk.send_raw(0xCC);
+                lk.send_raw(0xEE);
+                for i in (data.len() as u32).to_le_bytes() {
+                    lk.send_raw(i);
+                }
+                for i in data {
+                    lk.send_raw(i);
+                }
+            })
+        }
     }
 }
