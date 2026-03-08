@@ -1,24 +1,20 @@
 #[cfg(feature = "enable_uart_outputs")]
 use crate::io::console::serial::SERIAL1;
 use crate::util::timer::TSC;
-use alloc::borrow::Cow;
 use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
-use alloc::vec::Vec;
-use core::cmp::max;
 use core::fmt::Display;
 use core::panic::Location;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use serde::Serialize;
-use spin::{Lazy, Once, RwLock, RwLockWriteGuard};
+use spin::{Lazy, RwLock};
 use x86_64::instructions::interrupts;
 
 pub static LOG_CAPACITY: AtomicUsize = AtomicUsize::new(5000);
 
-pub(crate) static LOG_BUF: Lazy<RwLock<VecDeque<Arc<OsLog>>>> = Lazy::new(|| {
-    RwLock::new(VecDeque::with_capacity(LOG_CAPACITY.load(Ordering::SeqCst)))
-});
+pub(crate) static LOG_BUF: Lazy<RwLock<VecDeque<Arc<OsLog>>>> =
+    Lazy::new(|| RwLock::new(VecDeque::with_capacity(LOG_CAPACITY.load(Ordering::SeqCst))));
 
 static LOG_HEAD_ID: AtomicUsize = AtomicUsize::new(0); // 0番目の要素の通算ID
 
@@ -143,8 +139,18 @@ macro_rules! log_last {
     ($by:expr,$tag:expr,$($text:tt)*) => { $crate::log_custom!("last", $by, $tag, $($text)*) };
 }
 
+#[macro_export]
+macro_rules! deb {
+    ($fmt:expr $(, $arg:tt)*) => { $crate::log_debug!("kernel", "debug", $fmt $(, $arg)*) };
+}
+
 #[track_caller]
-pub fn _custom(level: &'static str, by: &'static str, tag: &'static str, text: core::fmt::Arguments) {
+pub fn _custom(
+    level: &'static str,
+    by: &'static str,
+    tag: &'static str,
+    text: core::fmt::Arguments,
+) {
     let location = Location::caller();
     custom_internal(level, by, tag, text, location);
 }
@@ -168,30 +174,41 @@ impl Display for OsLog {
         write!(
             f,
             "({}), [{:<5}] [{:<5}] {} (at {}:{}:{})",
-            self.cpu_acpi_id,
-            self.level,
-            self.tag,
-            self.data,
-            self.file,
-            self.line,
-            self.column,
+            self.cpu_acpi_id, self.level, self.tag, self.data, self.file, self.line, self.column,
         )
     }
 }
 
 impl OsLog {
     pub fn to_short_string(&self) -> String {
-        alloc::format!("({}) [{}] {}: {}", self.cpu_acpi_id, self.level, self.tag, self.data)
+        alloc::format!(
+            "({}) [{}] {}: {}",
+            self.cpu_acpi_id,
+            self.level,
+            self.tag,
+            self.data
+        )
     }
 }
 
 #[inline]
-pub fn custom_internal(level: &'static str, by: &'static str, tag: &'static str, text: core::fmt::Arguments, loc: &'static Location) {
+pub fn custom_internal(
+    level: &'static str,
+    by: &'static str,
+    tag: &'static str,
+    text: core::fmt::Arguments,
+    loc: &'static Location,
+) {
     _real_custom_internal(level, by, tag, text, loc);
 }
 
-
-pub fn _real_custom_internal(level: &'static str, by: &'static str, tag: &'static str, text: core::fmt::Arguments, loc: &'static Location) {
+pub fn _real_custom_internal(
+    level: &'static str,
+    by: &'static str,
+    tag: &'static str,
+    text: core::fmt::Arguments,
+    loc: &'static Location,
+) {
     let mut time = 0;
 
     unsafe {
@@ -221,10 +238,7 @@ pub fn _real_custom_internal(level: &'static str, by: &'static str, tag: &'stati
 
     #[cfg(feature = "enable_uart_outputs")]
     {
-        let a = bincode::serde::encode_to_vec(
-            data,
-            bincode::config::standard()
-        );
+        let a = bincode::serde::encode_to_vec(data, bincode::config::standard());
 
         if let Ok(data) = a {
             interrupts::without_interrupts(|| {

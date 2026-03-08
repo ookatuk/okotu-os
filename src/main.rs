@@ -33,8 +33,10 @@ use crate::manager::load_task_manager::LoadTaskManager;
 use crate::manager::memory_manager::MemoryManager;
 use crate::mem::allocator::main::OsAllocator;
 use crate::mem::map::MemoryMapType;
+use crate::mem::paging::types::{PageEntryFlags, PageLevel, get_addr};
+use crate::mem::types::{MemData, MemMap};
 use crate::util::result::Error;
-use crate::util::timer::{TSC};
+use crate::util::timer::TSC;
 use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -49,33 +51,37 @@ use core::ffi::c_void;
 use core::hint::spin_loop;
 use core::num::NonZeroUsize;
 use core::panic::PanicInfo;
-use core::ptr::{null_mut, NonNull};
+use core::ptr::{NonNull, addr_of, null_mut};
 use core::sync::atomic::Ordering;
 use fontdue::Font;
 use num_traits::Zero;
 use serde::Deserialize;
 use spin::{Once, RwLock};
-use uefi::boot::{set_image_handle, AllocateType, TimerTrigger};
+use uefi::boot::{AllocateType, TimerTrigger, set_image_handle};
 use uefi::proto::console::gop::Mode;
 use uefi::proto::console::text::Key;
 use uefi::table::set_system_table;
-use uefi::{boot, cstr16, entry, CStr16, Event};
+use uefi::{CStr16, Event, boot, cstr16, entry};
 use uefi_raw::table::boot::{EventType, Tpl};
 use uefi_raw::table::runtime::ResetType;
 use uefi_raw::table::system::SystemTable;
 use uefi_raw::{PhysicalAddress, Status};
 use util::result;
-use x86_64::instructions::interrupts;
 use x86_64::instructions::interrupts::without_interrupts;
+use x86_64::instructions::{interrupts, tlb};
+use x86_64::registers::control::{Cr3, Cr3Flags};
+use x86_64::registers::model_specific::Msr;
+use x86_64::structures::paging::{PageTable, PhysFrame};
+use x86_64::{PhysAddr, VirtAddr};
 
 mod cpu;
 mod fonts;
 mod fs;
 mod io;
 mod manager;
+mod mem;
 mod rng;
 mod util;
-mod mem;
 
 #[global_allocator]
 /// 物理/仮想アロケーター.
@@ -164,7 +170,7 @@ impl Main {
     fn init_font(&self) -> result::Result<()> {
         let font = fonts::load()?;
 
-        MAIN_FONT.call_once(|| { font });
+        MAIN_FONT.call_once(|| font);
 
         let new_font = Box::new(fonts::load_font(unsafe { MAIN_FONT.get_unchecked() }));
         interrupts::without_interrupts(|| {
@@ -208,7 +214,7 @@ impl Main {
 
     #[cfg(feature = "enable_required_safety_checks")]
     pub extern "efiapi" fn check_canaria(_event: uefi::Event, context: Option<NonNull<c_void>>) {
-        let me = unsafe { &*(context.unwrap().as_ptr() as *const Main) };
+        let me = unsafe { &*(context.unwrap().as_ptr() as *mut Main) };
 
         let (stack_top, stack_len) = without_interrupts(|| {
             let lock = me.stack_data.try_read();
@@ -270,14 +276,14 @@ impl Main {
                 Some(Self::check_canaria),
                 self_ptr,
             )
-                .unwrap()
+            .unwrap()
         };
 
         Error::try_raise(
             uefi::boot::set_timer(&event, TimerTrigger::Periodic(100_000)),
             Some("failed to set timer periodic event."),
         )
-            .unwrap();
+        .unwrap();
 
         log_info!("kernel", "canaria", "created.");
     }
@@ -293,9 +299,7 @@ impl Main {
 
         let mut pr = |data: &CStr16| -> result::Result {
             let a = st_o.get_mut().unwrap();
-            a.output_string(
-                data
-            )?;
+            a.output_string(data)?;
             Ok(())
         };
 
@@ -318,7 +322,7 @@ impl Main {
                     #[cfg(feature = "include_boot_option_to_memcheck")]
                     '2' => break BootMode::MemCheck,
                     '3' => break BootMode::Reboot,
-                    _ => continue
+                    _ => continue,
                 }
             }
         };
@@ -328,165 +332,187 @@ impl Main {
 
     #[cfg(feature = "include_boot_option_to_memcheck")]
     fn memcheck(&self) -> ! {
-        log_info!("kernel", "memcheck", "memory check started. It will take some time.");
+        log_info!(
+            "kernel",
+            "memcheck",
+            "memory check started. It will take some time."
+        );
 
         let default = util::logger::LOG_CAPACITY.load(Ordering::SeqCst);
         util::logger::LOG_CAPACITY.store(0, Ordering::SeqCst);
-
         let _ = uefi::boot::set_watchdog_timer(0, 0, None);
 
         unsafe fn flush_range(start: *mut u64, size_bytes: usize) {
             let mut ptr = start as usize;
             let end = ptr + size_bytes;
-
             while ptr < end {
-                // clflush [ptr] を実行
                 asm!("clflush [{0}]", in(reg) ptr);
-
                 ptr += 64;
             }
-
             asm!("mfence");
         }
 
         let mut error_log = vec![];
-
-        let mut size: f64 = 0.0;
-
-        let mut tmp: usize = 0;
-
         let map = without_interrupts(|| {
             *self.load_task_manager.do_parent.get().unwrap().write() = 0.0;
-            self.memory_manager.uefi_memory_map.get().unwrap().read().clone()
+            self.memory_manager
+                .uefi_memory_map
+                .get()
+                .unwrap()
+                .read()
+                .clone()
         });
 
-        log_info!("kernel", "memcheck", "getting size...");
+        let patterns: [Option<u8>; 5] = [Some(0), Some(0xff), Some(0x55), Some(0xaa), None];
 
+        // 全体サイズ計算 (4KiB単位で精密に)
+        let mut total_size: f64 = 0.0;
         for i in map.0.iter() {
             if i.memory_type == MemoryMapType::NotAllocatedByUefiAllocator {
-                size += (i.data.end - i.data.start) as f64;
+                let s = (i.data.start + 0xFFF) & !0xFFF;
+                let e = i.data.end & !0xFFF;
+                if s < e {
+                    total_size += (e - s) as f64;
+                }
             }
         }
+        let progress_denominator = total_size * patterns.len() as f64;
 
-        size *= 4.0;
-
-        for target_bit in 0..=3 {
-            let mut pattern = target_bit | (target_bit << 2);
-
-            // 2. 4bit を 8bit に広げる (vvvv)
-            pattern |= pattern << 4;
-
-            // 3. 8bit を 16bit に広げる
-            pattern |= pattern << 8;
-
-            // 4. 16bit を 32bit に広げる
-            pattern |= pattern << 16;
-
-            // 5. 32bit を 64bit に広げる
-            pattern |= pattern << 32;
-
-            log_info!("kernel", "memcheck", "current pattern: {:b}", pattern);
-
+        for &p_opt in &patterns {
             for descriptor in map.0.iter() {
-                if descriptor.memory_type == MemoryMapType::NotAllocatedByUefiAllocator {
-                    let raw_start = descriptor.data.start;
-                    let raw_end = descriptor.data.end;
+                if descriptor.memory_type != MemoryMapType::NotAllocatedByUefiAllocator {
+                    continue;
+                }
 
-                    let start_addr = (raw_start + 0xF_FFFF) & !0xF_FFFF;
+                let range_start = (descriptor.data.start + 0xFFF) & !0xFFF;
+                let range_end = descriptor.data.end & !0xFFF;
 
-                    let end_addr = raw_end & !0xFFFFF;
+                let mut current_pos = range_start;
+                let mut old: u64 = 0;
 
-                    if start_addr < end_addr {
-                        let start = start_addr as *mut u64;
-                        let end = end_addr as *mut u64;
+                while current_pos < range_end {
+                    let remaining = range_end - current_pos;
 
-                        // 1MiBごとのループ
-                        for i in 0..((end.addr() - start.addr()) / (1024 * 1024)) {
-                            let mb_start = (start.addr() + i * 1024 * 1024) as *mut u64;
-                            let mb_end = (mb_start.addr() + 1024 * 1024) as *mut u64;
+                    let (alloc_pages, is_large) = if remaining >= 2 * 1024 * 1024 {
+                        (512, true)
+                    } else {
+                        (1, false)
+                    };
 
-                            let parent = without_interrupts(|| {
-                                (*self.load_task_manager.do_parent.get().unwrap().read() * 100.0) as u8
-                            });
+                    if old < current_pos {
+                        let parent = without_interrupts(|| {
+                            *self.load_task_manager.do_parent.get().unwrap().read()
+                        });
 
-                            let res = uefi::boot::allocate_pages(
-                                AllocateType::Address(mb_start.addr() as PhysicalAddress),
-                                uefi::boot::MemoryType::LOADER_DATA,
-                                256,
-                            );
-                            if res.is_err() {
-                                without_interrupts(|| {
-                                    let mut a = self.load_task_manager.do_parent.get().unwrap().write();
+                        let val = match p_opt {
+                            Some(u) => u.to_string(),
+                            None => "ptr".to_string(),
+                        };
 
-                                    let add = (mb_end.addr() - mb_start.addr()) as f64 / size;
-
-                                    *a += add;
-                                });
-                                continue;
-                            }
-
-                            if (mb_start.addr() / 1024 / 1024).is_multiple_of(20) {
-                                log_info!("kernel", "memcheck", "({} %)checking {:#X} to {:#X} (Mib)", parent, mb_start.addr() / 1024 / 1024, mb_end.addr() / 1024 / 1024);
-                            }
-
-                            let mut ptr = mb_start;
-                            while ptr < mb_end {
-                                unsafe { ptr.write_volatile(pattern) };
-                                ptr = unsafe { ptr.add(1) };
-                            }
-
-                            unsafe { flush_range(mb_start, mb_end.addr() - mb_start.addr()) };
-
-                            ptr = mb_start;
-                            while ptr < mb_end {
-                                let val = unsafe { ptr.read_volatile() };
-                                if val != pattern {
-                                    log_warn!("kernel", "memcheck", "broken({}): {}", error_log.len(), ptr.addr());
-                                    if !error_log.contains(&ptr.addr()) {
-                                        error_log.push(ptr.addr());
-                                    }
-                                }
-                                unsafe { ptr.write_volatile(0) };
-                                ptr = unsafe { ptr.add(1) };
-                            }
-
-                            without_interrupts(|| {
-                                let mut a = self.load_task_manager.do_parent.get().unwrap().write();
-
-                                let add = (mb_end.addr() - mb_start.addr()) as f64 / size;
-
-                                *a += add
-                            });
-
-                            let _ = unsafe {
-                                uefi::boot::free_pages(
-                                    res.unwrap_unchecked(),
-                                    256,
-                                )
-                            };
-                        }
+                        log_info!(
+                            "kernel",
+                            "memcheck",
+                            "({} %) ({}) checking {:#X}",
+                            parent as u8,
+                            val,
+                            current_pos
+                        );
+                        old = current_pos + (1024 * 1024 * 100);
                     }
+
+                    let mut res = uefi::boot::allocate_pages(
+                        AllocateType::Address(current_pos as PhysicalAddress),
+                        uefi::boot::MemoryType::LOADER_DATA,
+                        alloc_pages,
+                    );
+
+                    if res.is_err() && is_large {
+                        res = uefi::boot::allocate_pages(
+                            AllocateType::Address(current_pos as PhysicalAddress),
+                            uefi::boot::MemoryType::LOADER_DATA,
+                            1,
+                        );
+                    }
+
+                    let actual_pages = if res.is_ok() {
+                        if is_large && res.is_ok() { 512 } else { 1 }
+                    } else {
+                        current_pos += if is_large { 2 * 1024 * 1024 } else { 4 * 1024 };
+                        self.update_memcheck_progress(
+                            if is_large { 2 * 1024 * 1024 } else { 4 * 1024 },
+                            progress_denominator,
+                        );
+                        continue;
+                    };
+
+                    let check_len = actual_pages * 4096;
+                    let mb_start = current_pos as *mut u64;
+                    let mb_end = (current_pos + check_len) as *mut u64;
+
+                    let mut ptr = mb_start;
+                    while ptr < mb_end {
+                        let val = match p_opt {
+                            Some(u) => u64::from_ne_bytes([u; 8]),
+                            None => ptr.addr() as u64,
+                        };
+                        unsafe { ptr.write_volatile(val) };
+                        ptr = unsafe { ptr.add(1) };
+                    }
+
+                    unsafe { flush_range(mb_start, check_len as usize) };
+                    ptr = mb_start;
+                    while ptr < mb_end {
+                        let expected = match p_opt {
+                            Some(u) => u64::from_ne_bytes([u; 8]),
+                            None => ptr.addr() as u64,
+                        };
+                        let actual = unsafe { ptr.read_volatile() };
+                        if actual != expected {
+                            if !error_log.contains(&ptr.addr()) {
+                                error_log.push(ptr.addr());
+                            }
+                        }
+                        unsafe { ptr.write_volatile(0) };
+                        ptr = unsafe { ptr.add(1) };
+                    }
+
+                    self.update_memcheck_progress(check_len as usize, progress_denominator);
+
+                    let ptr = core::ptr::NonNull::new(current_pos as *mut u8).unwrap();
+                    let _ = unsafe { uefi::boot::free_pages(ptr, actual_pages as usize) };
+                    current_pos += check_len;
                 }
             }
         }
 
         util::logger::LOG_CAPACITY.store(default, Ordering::SeqCst);
 
+        // メッセージ表示の変更
         if !error_log.is_empty() {
-            log_warn!("kernel", "memcheck", "any key to exit. broken detect: {:?}", error_log);
+            log_warn!(
+                "kernel",
+                "memcheck",
+                "press key to exit. broken detect: {:?}",
+                error_log
+            );
         } else {
-            log_info!("kernel", "memcheck", "memory check success. any key to exit");
+            log_info!(
+                "kernel",
+                "memcheck",
+                "press key to exit. memory check success."
+            );
         }
 
         let st_i = util::proto::open::<uefi::proto::console::text::Input>(None).unwrap();
-
         boot::wait_for_event(&mut [st_i.wait_for_key_event().unwrap()]).unwrap();
+        uefi::runtime::reset(ResetType::COLD, Status::SUCCESS, None);
+    }
 
-        uefi::runtime::reset(
-            ResetType::COLD,
-            Status::SUCCESS,
-            None,
-        );
+    fn update_memcheck_progress(&self, bytes: usize, denominator: f64) {
+        without_interrupts(|| {
+            let mut a = self.load_task_manager.do_parent.get().unwrap().write();
+            *a += bytes as f64 / denominator;
+        });
     }
 
     pub unsafe extern "C" fn main(&self, stack_top: u64, stack_len: u64) -> ! {
@@ -502,20 +528,18 @@ impl Main {
 
             log_info!("kernel", "thread safe", "creating gs...");
 
-            let idt_stack =
-                unsafe{alloc::alloc::alloc(Layout::from_size_align(stack_len as usize, 16).unwrap())};
+            let idt_stack = unsafe {
+                alloc::alloc::alloc(Layout::from_size_align(stack_len as usize, 16).unwrap())
+            };
 
             assert!(!idt_stack.is_null());
 
-            unsafe {
-                mem::thread_safe::init_gs(null_mut(), idt_stack.add(stack_len as usize))
-            };
+            unsafe { mem::thread_safe::init_gs(null_mut(), idt_stack.add(stack_len as usize)) };
 
             log_info!("kernel", "thread safe", "created gs");
         }
 
         let res = self.frist_init();
-
 
         #[cfg(feature = "enable_essential_safety_checks")]
         {
@@ -559,11 +583,7 @@ impl Main {
 
             if mode == BootMode::Reboot {
                 log_info!("kernel", "kernel", "rebooting");
-                uefi::runtime::reset(
-                    ResetType::COLD,
-                    Status::SUCCESS,
-                    None,
-                );
+                uefi::runtime::reset(ResetType::COLD, Status::SUCCESS, None);
             }
 
             mode
@@ -574,8 +594,16 @@ impl Main {
         log_info!("kernel", "main", "starting loading screen...");
 
         without_interrupts(|| {
-            self.display_manager.gop_data.write().as_mut().unwrap().get_good_mode().unwrap();
-            self.display_manager.start_load_grap().expect("failed to start load screen");
+            self.display_manager
+                .gop_data
+                .write()
+                .as_mut()
+                .unwrap()
+                .get_good_mode()
+                .unwrap();
+            self.display_manager
+                .start_load_grap()
+                .expect("failed to start load screen");
         });
 
         self.do_fn.get().unwrap()();
@@ -595,9 +623,13 @@ impl Main {
 
             let should_add_alloc = {
                 #[cfg(feature = "include_boot_option_to_memcheck")]
-                { size.is_none() }
+                {
+                    size.is_none()
+                }
                 #[cfg(not(feature = "include_boot_option_to_memcheck"))]
-                { true }
+                {
+                    true
+                }
             };
 
             (size, should_add_alloc)
@@ -605,6 +637,21 @@ impl Main {
         #[cfg(not(feature = "enable_boot_option"))]
         let (size, should_add_alloc) = (None, true);
 
+        let (gop_ptr, gop_len) = without_interrupts(|| {
+            let lock = self.display_manager.gop_data.read();
+            let data = lock.as_ref().unwrap();
+
+            let raw_ptr = data.ptr.unwrap().addr().get();
+            let raw_len = data.h.get() * data.stride.get() * 4;
+
+            let aligned_ptr = raw_ptr & !4095;
+
+            let offset = raw_ptr - aligned_ptr;
+
+            let aligned_len = (raw_len + offset + 4095) & !4095;
+
+            (aligned_ptr, aligned_len)
+        });
 
         log_info!("kernel", "main", "initing memory...");
 
@@ -614,14 +661,19 @@ impl Main {
                 .expect("failed to init memory system.");
 
             if should_add_alloc {
-                self.memory_manager.add_alloc()
+                self.memory_manager
+                    .add_alloc()
                     .expect("failed to init memory system.");
             }
         };
 
         #[cfg(feature = "enable_boot_option")]
         if !should_add_alloc {
-            log_info!("kernel", "main", "memory check required. starting memory check...");
+            log_info!(
+                "kernel",
+                "main",
+                "memory check required. starting memory check..."
+            );
             self.memcheck();
         }
 
@@ -631,8 +683,7 @@ impl Main {
 
         {
             let event = unsafe {
-                self
-                    .display_manager
+                self.display_manager
                     .gop_uefi_event
                     .get()
                     .unwrap()
@@ -646,6 +697,168 @@ impl Main {
 
         self.display_manager.do_load_grap_in_now();
 
+        let mut codes = without_interrupts(|| {
+            let mut data = vec![];
+
+            let a = self.memory_manager.uefi_memory_map.get().unwrap().read();
+            for i in a.0.iter() {
+                if i.memory_type == MemoryMapType::KernelCode
+                    || i.memory_type == MemoryMapType::UefiRuntimeServiceCode
+                {
+                    let raw_start = i.data.start as usize;
+                    let raw_end = i.data.end as usize;
+
+                    let aligned_start = raw_start & !0xfff;
+                    let aligned_end = (raw_end + 0xfff) & !0xfff;
+
+                    let len = aligned_end - aligned_start;
+                    if len < 4096 {
+                        continue;
+                    }
+
+                    data.push(MemData::<usize> {
+                        start: aligned_start,
+                        len,
+                    })
+                }
+            }
+
+            data
+        });
+
+        let mut list = vec![
+            // マッピングから一部のページをｐresnetしないようにする
+            MemData {
+                start: gop_ptr,
+                len: gop_len,
+            },
+        ];
+
+        let mut flag = vec![
+            PageEntryFlags::WRITABLE
+                | PageEntryFlags::PRESENT
+                | PageEntryFlags::EXECUTE_DISABLE
+                | PageEntryFlags::PAT, // gop
+        ];
+
+        {
+            let len = codes.len();
+            list.append(&mut codes);
+            flag.reserve(len);
+            for _ in 0..len {
+                flag.push(PageEntryFlags::PRESENT | PageEntryFlags::WRITABLE); // kernel code/loader_code
+            }
+
+            let vec = self.memory_manager.uefi_memory_map.get().unwrap().read();
+
+            for i in vec.0.iter() {
+                if i.memory_type != MemoryMapType::NotAllocatedByUefiAllocator && // アロケーターの範囲/アロケート済み範囲
+                    i.memory_type != MemoryMapType::UefiBootServicesAllocated &&
+
+                    i.memory_type != MemoryMapType::KernelData &&  // data
+                    i.memory_type != MemoryMapType::UefiRuntimeServiceAllocated &&
+
+                    i.memory_type != MemoryMapType::AcpiTable &&  // acpi関係
+                    i.memory_type != MemoryMapType::Acpi
+                {
+                    continue;
+                }
+
+                let raw_start = i.data.start as usize;
+                let raw_end = i.data.end as usize;
+
+                let aligned_start = raw_start & !0xfff;
+                let aligned_end = (raw_end + 0xfff) & !0xfff;
+
+                let len = aligned_end - aligned_start;
+                if len < 4096 {
+                    continue;
+                }
+
+                flag.push(
+                    PageEntryFlags::PRESENT
+                        | PageEntryFlags::WRITABLE
+                        | PageEntryFlags::EXECUTE_DISABLE,
+                );
+                list.push(MemData {
+                    start: aligned_start,
+                    len,
+                });
+            }
+
+            for i in vec.0.iter() {
+                if i.memory_type != MemoryMapType::Mmio {
+                    continue;
+                }
+
+                let raw_start = i.data.start as usize;
+                let raw_end = i.data.end as usize;
+
+                let aligned_start = raw_start & !0xfff;
+                let aligned_end = (raw_end + 0xfff) & !0xfff;
+
+                let len = aligned_end - aligned_start;
+                if len < 4096 {
+                    continue;
+                }
+
+                flag.push(
+                    PageEntryFlags::PRESENT
+                        | PageEntryFlags::WRITABLE
+                        | PageEntryFlags::EXECUTE_DISABLE
+                        | PageEntryFlags::PAT
+                        | PageEntryFlags::PCD,
+                );
+                list.push(MemData {
+                    start: aligned_start,
+                    len,
+                });
+            }
+        }
+
+        unsafe {
+            let mut pat_msr = Msr::new(0x277);
+            let mut pat = pat_msr.read();
+
+            pat &= !(0b111 << 32);
+            pat |= (0x01 << 32);
+
+            pat &= !(0b111 << 24);
+            pat |= (0x00 << 24);
+
+            pat_msr.write(pat);
+        }
+        let a = Cr3::read().0.start_address().as_u64() as *mut PageTable;
+
+        log_debug!("kernel", "paging", "creating paging...");
+
+        let page = mem::paging::types::create_page_table(
+            &mut list,
+            &mut flag,
+            PageLevel::Pdpt,
+            PageLevel::Pml4,
+            unsafe { &mut *a },
+        )
+        .unwrap();
+
+        unsafe { asm!("WBINVD") }
+
+        let page_frame = PhysFrame::containing_address(page.phys);
+
+        unsafe {
+            Cr3::write(page_frame, Cr3Flags::empty());
+        }
+
+        tlb::flush_all();
+
+        // 再作成前だとwritableとかが問題だから再作成後に実行
+        self.memory_manager
+            .add_allocators(&[MemoryMapType::UefiBootServicesAllocated])
+            .unwrap();
+
+        deb!("a");
+
+        self.display_manager.do_load_grap_in_now();
 
         loop {
             spin_loop();
@@ -655,9 +868,7 @@ impl Main {
 
 mod _internal_init {
     use crate::cpu::utils;
-    use crate::{
-        cpu, io, log_custom, log_debug, util, Main, DEBUG_PROTOCOL_VERSION, VERSION,
-    };
+    use crate::{DEBUG_PROTOCOL_VERSION, Main, VERSION, cpu, io, log_custom, log_debug, util};
     use core::alloc::Layout;
     use core::ptr;
     use uefi::runtime;
@@ -695,11 +906,26 @@ mod _internal_init {
     #[inline(always)]
     pub unsafe extern "C" fn debug_hand() {
         if cfg!(feature = "enable_lldb_debug") {
-            unsafe { core::arch::asm!("int3"); }
+            unsafe {
+                core::arch::asm!("int3");
+            }
         }
 
         log_custom!("s", "ds", "a", "");
-        log_custom!("s", "ds", "d", "{}", if cfg!(any(feature = "enable_debug_outputs", feature = "enable_debug_level_outputs")) { 1 } else { 0 });
+        log_custom!(
+            "s",
+            "ds",
+            "d",
+            "{}",
+            if cfg!(any(
+                feature = "enable_debug_outputs",
+                feature = "enable_debug_level_outputs"
+            )) {
+                1
+            } else {
+                0
+            }
+        );
         log_custom!("s", "ds", "v", "{}", VERSION);
         log_custom!("s", "ds", "pv", "{}", DEBUG_PROTOCOL_VERSION);
 
@@ -748,7 +974,7 @@ mod _internal_init {
 
 #[unsafe(naked)]
 #[unsafe(export_name = "efi_main")]
-pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *const c_void) -> ! {
+pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *mut c_void) -> ! {
     // Generally, the way arguments and return values are handled is called the "ABI",
     // and the most central one is the "C ABI".
 
@@ -769,51 +995,51 @@ pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *const c_void) ->
     naked_asm!(
         "endbr64",                  // cet::allow_jump() //for CET (Control-flow Enforcement Technology) instructions
 
-                                    // let eax: *const u64;
-                                    // let r12: *const u64;
-                                    // let rdx: *const u64;
+                                    // let eax: *mut u64;
+                                    // let r12: *mut u64;
+                                    // let rdx: *mut u64;
 
                                     // // It's not actually true, but it's roughly like this
                                     // ```
-                                    //     let mut rcx: *const u64 = func.args._handle
-                                    //     let mut rdx: *const u64 = func.args._table
+                                    //     let mut rcx: *mut u64 = func.args._handle
+                                    //     let mut rdx: *mut u64 = func.args._table
 
                                     //     let mut rsp: *mut u8    = get_stack_pointer!().addr()
-                                    //     let mut gs : *const u16 = get_gs_register!().addr()
+                                    //     let mut gs : *mut u16 = get_gs_register!().addr()
                                     // ```
 
-        "xor eax, eax",             // eax: *const u64  = 0
-        "mov gs, ax",               // gs : *const u16  = eax as u16
+        "xor eax, eax",             // eax: *mut u64  = 0
+        "mov gs, ax",               // gs : *mut u16  = eax as u16
 
         "sub rsp, 56",              // rsp: *mut u8    -= 56  // reserve 56-byte stack frame above current rsp
 
-        "mov r12, rdx",             // r12: *const u64  = rdx
+        "mov r12, rdx",             // r12: *mut u64  = rdx
         "call {set_handle}",        // set_handle(rcx: `func.args._handle`) // rcx to Clobbered
 
-        "mov rcx, r12",             // rcx: *const u64  = r12
+        "mov rcx, r12",             // rcx: *mut u64  = r12
         "call {set_table}",         // set_table(rcx: `func.args._table`)  // rcx to Clobbered
 
         "call {init_dep}",          // init_dep()
 
         "call {debug_hand_shake}",  // call_hand_shake()
 
-        "lea rcx, [rsp + 32]",      // rcx: *const u64  = rsp.add(32) as u64
+        "lea rcx, [rsp + 32]",      // rcx: *mut u64  = rsp.add(32) as u64
 
         "call {allocate}",          // allocate(mut rcx: `rsp.add(32)`)  // rcx to Clobbered
-                                    // rcx.add(0)       = u64  // stack_top
-                                    // rcx.add(1)       = u64  // *mut Main
-                                    // rcx.add(2)       = u64  // stack_len
+                                    // // rcx.add(0)       = u64  // stack_top
+                                    // // rcx.add(1)       = u64  // *mut Main
+                                    // // rcx.add(2)       = u64  // stack_len
 
         "mov rdx, [rsp + 32]",      // rdx: &u64        = rsp + 32  // stack_top
         "mov rcx, [rsp + 40]",      // rcx: &u64        = rsp + 40  // &Self
         "mov r8, [rsp + 48]",       // r8 : &u64        = rsp + 48  // stack_len
 
-        "and rdx, -16",             // rdx: *const u64 &= -16 // rdx &= !15  // 16-bytes align
+        "and rdx, -16",             // rdx: *mut u64 &= -16 // rdx &= !15  // 16-bytes align
 
         "lea rsp, [rdx - 32]",      // rsp: *mut u8     = (rdx - 32) as *mut _ // move to new stack and reserve 32-byte stack
 
         "jmp {main}",               // main(rcx as &Main, rdx, r8)  // main(rcx: &Main, rdx: u64, r8: u64) -> !
-                                    // unreachable!();
+        "ud2",                      // unreachable!();
         init_dep = sym _internal_init::init_dep,
         debug_hand_shake = sym _internal_init::debug_hand,
         allocate = sym _internal_init::allocate,

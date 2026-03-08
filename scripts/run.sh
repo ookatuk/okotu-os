@@ -29,7 +29,7 @@ qemu-system-x86_64 \
   -serial pipe:"$WORKSPACE_ROOT/serial_pipe" \
   -device virtio-gpu-pci \
   -display gtk,gl=on \
-  -machine q35 -m 10G -enable-kvm -cpu host \
+  -machine q35 -m 5G -enable-kvm -cpu host \
   -no-reboot -no-shutdown -smp 2 \
   "$@"
 

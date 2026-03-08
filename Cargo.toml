@@ -6,7 +6,7 @@ edition = "2024"
 [features]
 default = ["enable_uart_outputs", "enable_normal_safety_checks", "enable_systemctl_arg_checks", "include_boot_option_to_memcheck"]
 
-features_enable_debug_mode = ["enable_debug_outputs", "enable_debug_level_outputs"]
+features_enable_debug_mode = ["enable_debug_outputs", "enable_debug_level_outputs", "enable_overprotective_safety_checks"]
 
 enable_debug_outputs = []
 enable_debug_level_outputs = []
@@ -25,6 +25,8 @@ enable_essential_safety_checks = []
 enable_required_safety_checks = ["enable_essential_safety_checks"]
 
 enable_normal_safety_checks = ["enable_required_safety_checks"]
+
+enable_overprotective_safety_checks = ["enable_normal_safety_checks"]
 
 enable_systemctl_arg_checks = []
 
@@ -45,6 +47,8 @@ libm = { version = "0.2.16", default-features = false, features = ["arch"] }
 uart_16550 = { version = "0.4.0", default-features = false, features = ["stable"], optional = true }
 acpi = { version = "6.1.0", default-features = false, features = ["alloc", "aml"] }
 itertools = { version = "0.14.0", default-features = false, features = ["use_alloc"] }
+num-derive = "0.4.2"
+x86 = "0.52.0"
 
 [profile.dev]
 opt-level = 1

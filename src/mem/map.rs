@@ -7,7 +7,9 @@ use uefi_raw::table::boot::MemoryType;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum MemoryMapType {
     KernelData,
+    KernelCode,
     UefiRuntimeServiceAllocated,
+    UefiRuntimeServiceCode,
     UefiBootServicesAllocated,
     NotAllocatedByUefiAllocator,
     Broken,
@@ -18,6 +20,7 @@ pub enum MemoryMapType {
     UsedByHardWare,
 
     Other,
+    Mmio,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -33,14 +36,14 @@ impl Map {
                 start: start as u64,
                 end: end as u64,
             },
-            memory_type
+            memory_type,
         }
     }
 }
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub struct MemMapping (pub(crate) Vec<Map>);
+pub struct MemMapping(pub(crate) Vec<Map>);
 
 impl MemMapping {
     pub fn sort(&mut self) {
@@ -64,7 +67,9 @@ impl MemMapping {
     }
 
     pub fn minimize(&mut self) {
-        if self.0.is_empty() { return; }
+        if self.0.is_empty() {
+            return;
+        }
 
         self.clean();
 
@@ -72,7 +77,8 @@ impl MemMapping {
 
         for r in 1..self.0.len() {
             if self.0[w].memory_type == self.0[r].memory_type
-                && self.0[w].data.end == self.0[r].data.start {
+                && self.0[w].data.end == self.0[r].data.start
+            {
                 self.0[w].data.end = self.0[r].data.end;
             } else {
                 w += 1;
@@ -98,13 +104,19 @@ impl MemMapping {
                 start: data_ptr as u64,
                 end: (data_ptr + total_size) as u64,
             },
-            false
+            false,
         );
     }
 
     pub fn think_add(&mut self, data: Map, allow_move_and_auto_minimize: bool) {
-        let prev_idx = self.0.iter().position(|m| m.data.end == data.data.start && m.memory_type == data.memory_type);
-        let next_idx = self.0.iter().position(|m| m.data.start == data.data.end && m.memory_type == data.memory_type);
+        let prev_idx = self
+            .0
+            .iter()
+            .position(|m| m.data.end == data.data.start && m.memory_type == data.memory_type);
+        let next_idx = self
+            .0
+            .iter()
+            .position(|m| m.data.start == data.data.end && m.memory_type == data.memory_type);
 
         match (prev_idx, next_idx) {
             (Some(p), Some(n)) => {
@@ -164,12 +176,20 @@ impl MemMapping {
         }
     }
 
-    pub fn change(&mut self, m_type: MemoryMapType, data: MemMap, allow_move_andauto_minimize: bool) {
+    pub fn change(
+        &mut self,
+        m_type: MemoryMapType,
+        data: MemMap,
+        allow_move_andauto_minimize: bool,
+    ) {
         self.remove_range(data.clone(), false);
-        self.think_add(Map {
-            data,
-            memory_type: m_type,
-        }, false);
+        self.think_add(
+            Map {
+                data,
+                memory_type: m_type,
+            },
+            false,
+        );
 
         if allow_move_andauto_minimize {
             self.0.shrink_to_fit();
@@ -186,6 +206,7 @@ impl From<&MemoryMapOwned> for MemMapping {
                 MemoryType::RESERVED => MemoryMapType::Used,
 
                 MemoryType::LOADER_DATA => MemoryMapType::KernelData,
+                MemoryType::LOADER_CODE => MemoryMapType::KernelCode,
 
                 MemoryType::ACPI_NON_VOLATILE => MemoryMapType::Acpi,
                 MemoryType::ACPI_RECLAIM => MemoryMapType::AcpiTable,
@@ -194,13 +215,13 @@ impl From<&MemoryMapOwned> for MemMapping {
                 MemoryType::BOOT_SERVICES_DATA => MemoryMapType::UefiBootServicesAllocated,
 
                 MemoryType::PAL_CODE => MemoryMapType::UsedByHardWare,
-                MemoryType::RUNTIME_SERVICES_CODE => MemoryMapType::UefiRuntimeServiceAllocated,
+                MemoryType::RUNTIME_SERVICES_CODE => MemoryMapType::UefiRuntimeServiceCode,
                 MemoryType::RUNTIME_SERVICES_DATA => MemoryMapType::UefiRuntimeServiceAllocated,
 
                 MemoryType::PERSISTENT_MEMORY => MemoryMapType::NonVolatile,
 
-                MemoryType::MMIO_PORT_SPACE => MemoryMapType::Other,
-                MemoryType::MMIO => MemoryMapType::Other,
+                MemoryType::MMIO_PORT_SPACE => MemoryMapType::Mmio,
+                MemoryType::MMIO => MemoryMapType::Mmio,
 
                 MemoryType::CONVENTIONAL => MemoryMapType::NotAllocatedByUefiAllocator,
 
@@ -210,7 +231,7 @@ impl From<&MemoryMapOwned> for MemMapping {
             data.push(Map::new(
                 i.phys_start as usize,
                 (i.phys_start + (i.page_count * 4096)) as usize,
-                mtype
+                mtype,
             ));
         }
 

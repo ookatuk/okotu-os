@@ -9,6 +9,7 @@ use alloc::vec;
 use core::alloc::Layout;
 use core::num::NonZeroUsize;
 use core::ptr::addr_of;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::{Once, RwLock};
 use uefi::mem::memory_map::{MemoryMap, MemoryMapOwned};
 use uefi_raw::table::boot::MemoryType;
@@ -22,6 +23,8 @@ pub struct MemoryManager {
     pub do_fn: Once<Arc<dyn Fn()>>,
     pub uefi_memory_map: Once<Arc<RwLock<MemMapping>>>,
     pub internal_init_mem_tmp_alloc: RwLock<Option<HybridAllocator>>,
+    pub os_allocator_size: AtomicUsize,
+    pub max_addr: AtomicUsize,
 }
 
 impl MemoryManager {
@@ -88,6 +91,11 @@ impl MemoryManager {
             map.add_me_to_memory_map();
             map.sort();
 
+            self.max_addr.store(
+                map.0.iter().last().unwrap().data.end as usize,
+                Ordering::SeqCst,
+            );
+
             Ok(())
         })?;
 
@@ -128,6 +136,8 @@ impl MemoryManager {
             len: size,
         };
 
+        self.os_allocator_size.fetch_add(size, Ordering::SeqCst);
+
         self.create_memory_map()?;
         let len = self.uefi_memory_map.get().unwrap().read().0.len();
 
@@ -142,7 +152,7 @@ impl MemoryManager {
         Ok(())
     }
 
-    pub fn add_allocators(&self) -> result::Result {
+    pub fn add_allocators(&self, append_type: &[MemoryMapType]) -> result::Result {
         let map = self.uefi_memory_map.get().unwrap().read();
         self.do_fn.get().unwrap()();
 
@@ -150,18 +160,25 @@ impl MemoryManager {
         let mut size: u64 = 0;
 
         for i in map.0.iter() {
-            if i.memory_type != MemoryMapType::NotAllocatedByUefiAllocator {
+            if !append_type.contains(&i.memory_type) {
                 continue;
             }
-            let si = (i.data.end - i.data.start);
+
+            let start = i.data.start as usize;
+            let end = i.data.end as usize;
+
+            let si = (end - start) as u64;
             size += si;
 
             crate::ALLOC.os_allocator.get().unwrap().add(&vec![MemData {
-                start: i.data.start as usize,
+                start: start,
                 len: si as usize,
             }]);
             l += 1;
         }
+
+        self.os_allocator_size
+            .fetch_add(size as usize, Ordering::SeqCst);
 
         log_info!(
             "kernel",
@@ -205,7 +222,7 @@ impl MemoryManager {
     pub unsafe fn add_alloc(&self) -> result::Result {
         log_info!("kernel", "allocator", "creating full allocators...");
 
-        self.add_allocators()?;
+        self.add_allocators(&[MemoryMapType::NotAllocatedByUefiAllocator])?;
 
         self.do_fn.get().unwrap()();
 

@@ -165,6 +165,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-derive"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -362,6 +373,7 @@ dependencies = [
  "itertools",
  "libm",
  "miniz_oxide",
+ "num-derive",
  "num-traits",
  "proc-bitfield",
  "rustybuzz",
@@ -370,6 +382,7 @@ dependencies = [
  "uart_16550",
  "uefi",
  "uefi-raw",
+ "x86",
  "x86_64",
 ]
 
