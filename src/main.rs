@@ -3,7 +3,7 @@
 
 extern crate alloc;
 
-const VERSION: &str = concat!("v2-0.1.0_", "0", "-", env!("OS_BUILD"));
+const VERSION: &str = concat!(env!("OS_CYCLE"), "-v2-0.1.0_", "0", "-", env!("OS_BUILD"));
 
 /// OSプロトコルバージョン.
 const DEBUG_PROTOCOL_VERSION: &str = "1.0";
