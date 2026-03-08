@@ -5,7 +5,8 @@ use crate::mem::types::MemData;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
-use core::ptr::{null_mut, NonNull};
+use core::ptr::{NonNull, null_mut};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Once;
 use x86_64::instructions::interrupts::without_interrupts;
 
@@ -14,13 +15,20 @@ pub struct HybridAllocatorInner {
     frame_allocs: Vec<BoundaryTagFrameAllocator>,
 }
 
-pub struct HybridAllocator(spin::Mutex<HybridAllocatorInner>);
+pub struct HybridAllocator {
+    inner: spin::Mutex<HybridAllocatorInner>,
+    pub allocated: AtomicUsize,
+    pub have: AtomicUsize,
+}
 
 impl HybridAllocator {
     pub fn new(data_list: Vec<MemData<usize>>, add_max: usize) -> Self {
         let mut frame_allocs = Vec::with_capacity(add_max + data_list.len());
 
+        let mut size = 0;
+
         for data in data_list {
+            size += data.len;
             if let Ok((_rem, alloc)) = BoundaryTagFrameAllocator::new(data) {
                 frame_allocs.push(alloc);
             }
@@ -28,10 +36,14 @@ impl HybridAllocator {
 
         let slab_heads = vec![None; 9];
 
-        Self(spin::Mutex::new(HybridAllocatorInner {
-            slab_heads,
-            frame_allocs,
-        }))
+        Self {
+            inner: spin::Mutex::new(HybridAllocatorInner {
+                slab_heads,
+                frame_allocs,
+            }),
+            allocated: AtomicUsize::default(),
+            have: AtomicUsize::new(size),
+        }
     }
 
     pub fn add(&self, data_list: &Vec<MemData<usize>>) {
@@ -52,13 +64,15 @@ impl HybridAllocator {
                 current_data.len -= diff;
             }
 
+            self.have.fetch_add(current_data.len, Ordering::SeqCst);
+
             if let Ok((_rem, alloc)) = BoundaryTagFrameAllocator::new(current_data) {
                 tmp_vec.push(alloc);
             }
         }
 
         without_interrupts(|| {
-            let mut lock = self.0.lock();
+            let mut lock = self.inner.lock();
 
             lock.frame_allocs.append(&mut tmp_vec);
         });
@@ -99,23 +113,28 @@ impl HybridAllocatorInner {
 
 unsafe impl GlobalAlloc for HybridAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let mut mgr = self.0.lock();
+        let mut mgr = self.inner.lock();
         let size = layout.size();
 
         if size > 2048 || layout.align() > 4096 {
-            return unsafe { mgr.alloc_from_frames(layout) };
+            let res = unsafe { mgr.alloc_from_frames(layout) };
+            if !res.is_null() {
+                self.allocated.fetch_add(size, Ordering::SeqCst);
+            }
+            return res;
         }
 
         let bucket = (size.next_power_of_two().max(8).trailing_zeros() - 3) as usize;
         let slot_size = 1 << (bucket + 3);
 
-        // 1. 既存スラブに空きがあるか探索
-        // Vecの中身を Option から取り出してループ
         if let Some(current) = mgr.slab_heads[bucket] {
             let mut curr_ptr = Some(current);
             while let Some(mut slab_ptr) = curr_ptr {
                 let slab = unsafe { slab_ptr.as_mut() };
                 if let Some(ptr) = unsafe { slab.alloc(layout) } {
+                    if !ptr.is_null() {
+                        self.allocated.fetch_add(size, Ordering::SeqCst);
+                    }
                     return ptr;
                 }
                 curr_ptr = slab.next;
@@ -138,11 +157,17 @@ unsafe impl GlobalAlloc for HybridAllocator {
         // Vec の中身を更新
         mgr.slab_heads[bucket] = Some(new_slab_ptr);
 
-        unsafe { new_slab.alloc(layout).unwrap_or(null_mut()) }
+        let res = unsafe { new_slab.alloc(layout).unwrap_or(null_mut()) };
+        if !res.is_null() {
+            self.allocated.fetch_add(size, Ordering::SeqCst);
+        }
+        res
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let mut mgr = self.0.lock();
+        self.allocated.fetch_sub(layout.size(), Ordering::SeqCst);
+
+        let mut mgr = self.inner.lock();
         if layout.size() > 2048 || layout.align() > 4096 {
             unsafe { mgr.dealloc_from_frames(ptr, layout) };
         } else {
@@ -156,7 +181,7 @@ unsafe impl GlobalAlloc for HybridAllocator {
         let size = layout.size();
 
         if size > 2048 || layout.align() > 4096 {
-            let mut mgr = self.0.lock();
+            let mut mgr = self.inner.lock();
             for alloc_mutex in &mut mgr.frame_allocs {
                 let ptr = unsafe { alloc_mutex.0.lock().alloc_zeroed(layout) };
                 if !ptr.is_null() {
@@ -177,7 +202,15 @@ unsafe impl GlobalAlloc for HybridAllocator {
         let old_size = layout.size();
 
         if old_size > 2048 && new_size > 2048 {
-            let mut mgr = self.0.lock();
+            if old_size < new_size {
+                self.allocated
+                    .fetch_add(new_size - old_size, Ordering::SeqCst);
+            } else {
+                self.allocated
+                    .fetch_sub(old_size - new_size, Ordering::SeqCst);
+            }
+
+            let mut mgr = self.inner.lock();
             let addr = ptr as usize;
             for alloc_mutex in &mut mgr.frame_allocs {
                 let mut alloc = alloc_mutex.0.lock();

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["enable_uart_outputs", "enable_normal_safety_checks", "enable_systemctl_arg_checks", "include_boot_option_to_memcheck"]
+default = ["enable_uart_outputs", "enable_normal_safety_checks", "enable_syscall_arg_checks", "include_boot_option_to_memcheck"]
 
 features_enable_debug_mode = ["enable_debug_outputs", "enable_debug_level_outputs", "enable_overprotective_safety_checks"]
 
@@ -28,7 +28,7 @@ enable_normal_safety_checks = ["enable_required_safety_checks"]
 
 enable_overprotective_safety_checks = ["enable_normal_safety_checks"]
 
-enable_systemctl_arg_checks = []
+enable_syscall_arg_checks = []
 
 [dependencies]
 uefi = { version = "0.36.1", features = ["alloc", "logger"], default-features = false }

@@ -2,7 +2,8 @@
 #![no_main]
 
 extern crate alloc;
-const VERSION: &str = "1.0.0";
+
+const VERSION: &str = concat!("v2-0.1.0_", "0", "-", env!("OS_BUILD"));
 
 /// OSプロトコルバージョン.
 const DEBUG_PROTOCOL_VERSION: &str = "1.0";
@@ -82,7 +83,6 @@ mod manager;
 mod mem;
 mod rng;
 mod util;
-
 #[global_allocator]
 /// 物理/仮想アロケーター.
 pub static ALLOC: OsAllocator = OsAllocator::new();
@@ -515,128 +515,7 @@ impl Main {
         });
     }
 
-    pub unsafe extern "C" fn main(&self, stack_top: u64, stack_len: u64) -> ! {
-        {
-            without_interrupts(|| {
-                let mut lock = self.stack_data.write();
-                lock.top = stack_top as *mut _;
-                lock.len = stack_len as usize;
-            });
-
-            #[cfg(feature = "enable_required_safety_checks")]
-            self.enable_stack_canaria();
-
-            log_info!("kernel", "thread safe", "creating gs...");
-
-            let idt_stack = unsafe {
-                alloc::alloc::alloc(Layout::from_size_align(stack_len as usize, 16).unwrap())
-            };
-
-            assert!(!idt_stack.is_null());
-
-            unsafe { mem::thread_safe::init_gs(null_mut(), idt_stack.add(stack_len as usize)) };
-
-            log_info!("kernel", "thread safe", "created gs");
-        }
-
-        let res = self.frist_init();
-
-        #[cfg(feature = "enable_essential_safety_checks")]
-        {
-            log_info!("kernel", "main", "checking results");
-
-            for (i, ret) in res.iter().enumerate() {
-                if !ret.is_err() {
-                    continue;
-                }
-
-                if i == 3 || i == 2 {
-                    ret.clone().expect("Failed to Required subjects (graphic)");
-                } else if i == 1 {
-                    log_warn!(
-                        "kernel",
-                        "security",
-                        "failed to attach micro code: {}",
-                        ret.clone().unwrap_err().to_string()
-                    );
-                } else {
-                    log_warn!(
-                        "kernel",
-                        "kernel",
-                        "any failed(number: {}): {}",
-                        i,
-                        ret.clone().unwrap_err().to_string()
-                    );
-                }
-            }
-        }
-        #[cfg(not(feature = "enable_essential_safety_checks"))]
-        let _ = res;
-
-        self.do_fn.get().unwrap()();
-
-        #[cfg(feature = "enable_boot_option")]
-        let mode = {
-            log_info!("kernel", "main", "getting boot mode");
-
-            let mode = self.get_boot_mode().expect("Failed to get boot mode");
-
-            if mode == BootMode::Reboot {
-                log_info!("kernel", "kernel", "rebooting");
-                uefi::runtime::reset(ResetType::COLD, Status::SUCCESS, None);
-            }
-
-            mode
-        };
-
-        self.do_fn.get().unwrap()();
-
-        log_info!("kernel", "main", "starting loading screen...");
-
-        without_interrupts(|| {
-            self.display_manager
-                .gop_data
-                .write()
-                .as_mut()
-                .unwrap()
-                .get_good_mode()
-                .unwrap();
-            self.display_manager
-                .start_load_grap()
-                .expect("failed to start load screen");
-        });
-
-        self.do_fn.get().unwrap()();
-
-        #[cfg(feature = "enable_boot_option")]
-        let (size, should_add_alloc) = {
-            let size = {
-                #[cfg(feature = "include_boot_option_to_memcheck")]
-                if mode == BootMode::MemCheck {
-                    Some(unsafe { NonZeroUsize::new_unchecked(50 * 1024 * 1024) })
-                } else {
-                    None
-                }
-                #[cfg(not(feature = "include_boot_option_to_memcheck"))]
-                None
-            };
-
-            let should_add_alloc = {
-                #[cfg(feature = "include_boot_option_to_memcheck")]
-                {
-                    size.is_none()
-                }
-                #[cfg(not(feature = "include_boot_option_to_memcheck"))]
-                {
-                    true
-                }
-            };
-
-            (size, should_add_alloc)
-        };
-        #[cfg(not(feature = "enable_boot_option"))]
-        let (size, should_add_alloc) = (None, true);
-
+    fn exit_uefi(&self) -> result::Result {
         let (gop_ptr, gop_len) = without_interrupts(|| {
             let lock = self.display_manager.gop_data.read();
             let data = lock.as_ref().unwrap();
@@ -653,36 +532,10 @@ impl Main {
             (aligned_ptr, aligned_len)
         });
 
-        log_info!("kernel", "main", "initing memory...");
-
-        unsafe {
-            self.memory_manager
-                .init_memory(size)
-                .expect("failed to init memory system.");
-
-            if should_add_alloc {
-                self.memory_manager
-                    .add_alloc()
-                    .expect("failed to init memory system.");
-            }
-        };
-
-        #[cfg(feature = "enable_boot_option")]
-        if !should_add_alloc {
-            log_info!(
-                "kernel",
-                "main",
-                "memory check required. starting memory check..."
-            );
-            self.memcheck();
-        }
-
-        log_info!("kernel", "main", "exiting uefi...");
-
         self.do_fn.get().unwrap()();
 
-        {
-            let event = unsafe {
+        unsafe {
+            let event = {
                 self.display_manager
                     .gop_uefi_event
                     .get()
@@ -690,12 +543,16 @@ impl Main {
                     .unsafe_clone()
             };
 
-            let _ = boot::close_event(event).expect("failed to close grap event");
+            let _ = boot::close_event(event);
 
             let _ = boot::exit_boot_services(None);
         }
 
+        self.do_fn.get().unwrap()();
+
         self.display_manager.do_load_grap_in_now();
+
+        log_debug!("kernel", "paging", "creating paging data...");
 
         let mut codes = without_interrupts(|| {
             let mut data = vec![];
@@ -816,6 +673,8 @@ impl Main {
             }
         }
 
+        self.do_fn.get().unwrap()();
+
         unsafe {
             let mut pat_msr = Msr::new(0x277);
             let mut pat = pat_msr.read();
@@ -838,8 +697,11 @@ impl Main {
             PageLevel::Pdpt,
             PageLevel::Pml4,
             unsafe { &mut *a },
-        )
-        .unwrap();
+        )?;
+
+        self.do_fn.get().unwrap()();
+
+        log_debug!("kernel", "paging", "Registering...");
 
         unsafe { asm!("WBINVD") }
 
@@ -851,10 +713,216 @@ impl Main {
 
         tlb::flush_all();
 
+        log_debug!("kernel", "paging", "Registered");
+
+        self.do_fn.get().unwrap()();
+
         // 再作成前だとwritableとかが問題だから再作成後に実行
-        self.memory_manager
-            .add_allocators(&[MemoryMapType::UefiBootServicesAllocated])
-            .unwrap();
+        let res = self
+            .memory_manager
+            .add_allocators(&[MemoryMapType::UefiBootServicesAllocated]);
+
+        if let Err(res) = res {
+            log_warn!(
+                "kernel",
+                "memory",
+                "failed to add boot services allocated memory. ({})",
+                res
+            )
+        }
+
+        self.do_fn.get().unwrap()();
+
+        log_custom!(
+            "s",
+            "ds",
+            "am",
+            "{}",
+            ALLOC
+                .os_allocator
+                .get()
+                .unwrap()
+                .have
+                .load(Ordering::SeqCst)
+        );
+        deb!(
+            "{}",
+            (ALLOC
+                .os_allocator
+                .get()
+                .unwrap()
+                .allocated
+                .load(Ordering::SeqCst))
+        );
+
+        Ok(())
+    }
+
+    pub unsafe extern "C" fn main(&self, stack_top: u64, stack_len: u64) -> ! {
+        {
+            without_interrupts(|| {
+                let mut lock = self.stack_data.write();
+                lock.top = stack_top as *mut _;
+                lock.len = stack_len as usize;
+            });
+
+            #[cfg(feature = "enable_required_safety_checks")]
+            self.enable_stack_canaria();
+
+            log_info!("kernel", "thread safe", "creating gs...");
+
+            let idt_stack = unsafe {
+                alloc::alloc::alloc(Layout::from_size_align(stack_len as usize, 16).unwrap())
+            };
+
+            assert!(!idt_stack.is_null());
+
+            unsafe { mem::thread_safe::init_gs(null_mut(), idt_stack.add(stack_len as usize)) };
+
+            log_info!("kernel", "thread safe", "created gs");
+        }
+
+        let res = self.frist_init();
+
+        #[cfg(feature = "enable_essential_safety_checks")]
+        {
+            log_info!("kernel", "main", "checking results");
+
+            for (i, ret) in res.iter().enumerate() {
+                if !ret.is_err() {
+                    continue;
+                }
+
+                if i == 3 || i == 2 {
+                    ret.clone().expect("Failed to Required subjects (graphic)");
+                } else if i == 1 {
+                    log_warn!(
+                        "kernel",
+                        "security",
+                        "failed to attach micro code: {}",
+                        ret.clone().unwrap_err().to_string()
+                    );
+                } else {
+                    log_warn!(
+                        "kernel",
+                        "kernel",
+                        "any failed(number: {}): {}",
+                        i,
+                        ret.clone().unwrap_err().to_string()
+                    );
+                }
+            }
+        }
+        #[cfg(not(feature = "enable_essential_safety_checks"))]
+        let _ = res;
+
+        self.do_fn.get().unwrap()();
+
+        #[cfg(feature = "enable_boot_option")]
+        let mode = {
+            log_info!("kernel", "main", "getting boot mode");
+
+            let mode = self.get_boot_mode().expect("Failed to get boot mode");
+
+            if mode == BootMode::Reboot {
+                log_info!("kernel", "kernel", "rebooting");
+                log_custom!("s", "ds", "dis", "");
+                uefi::runtime::reset(ResetType::COLD, Status::SUCCESS, None);
+            }
+
+            mode
+        };
+
+        self.do_fn.get().unwrap()();
+
+        log_info!("kernel", "main", "starting loading screen...");
+
+        without_interrupts(|| {
+            self.display_manager
+                .gop_data
+                .write()
+                .as_mut()
+                .unwrap()
+                .get_good_mode()
+                .unwrap();
+            self.display_manager
+                .start_load_grap()
+                .expect("failed to start load screen");
+        });
+
+        self.do_fn.get().unwrap()();
+
+        #[cfg(feature = "enable_boot_option")]
+        let (size, should_add_alloc) = {
+            let size = {
+                #[cfg(feature = "include_boot_option_to_memcheck")]
+                if mode == BootMode::MemCheck {
+                    Some(unsafe { NonZeroUsize::new_unchecked(50 * 1024 * 1024) })
+                } else {
+                    None
+                }
+                #[cfg(not(feature = "include_boot_option_to_memcheck"))]
+                None
+            };
+
+            let should_add_alloc = {
+                #[cfg(feature = "include_boot_option_to_memcheck")]
+                {
+                    size.is_none()
+                }
+                #[cfg(not(feature = "include_boot_option_to_memcheck"))]
+                {
+                    true
+                }
+            };
+
+            (size, should_add_alloc)
+        };
+        #[cfg(not(feature = "enable_boot_option"))]
+        let (size, should_add_alloc) = (None, true);
+
+        log_info!("kernel", "main", "initing memory...");
+
+        unsafe {
+            self.memory_manager
+                .init_memory(size)
+                .expect("failed to init memory system.");
+
+            if should_add_alloc {
+                self.memory_manager
+                    .add_alloc()
+                    .expect("failed to init memory system.");
+            }
+
+            log_custom!(
+                "s",
+                "ds",
+                "am",
+                "{}",
+                ALLOC
+                    .os_allocator
+                    .get()
+                    .unwrap()
+                    .have
+                    .load(Ordering::SeqCst)
+            );
+        };
+
+        #[cfg(feature = "enable_boot_option")]
+        if !should_add_alloc {
+            log_info!(
+                "kernel",
+                "main",
+                "memory check required. starting memory check..."
+            );
+            self.memcheck();
+        }
+
+        log_info!("kernel", "main", "exiting uefi...");
+
+        self.do_fn.get().unwrap()();
+
+        self.exit_uefi().expect("failed to exit uefi.");
 
         deb!("a");
 
