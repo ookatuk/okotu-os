@@ -1,4 +1,4 @@
-use crate::log_info;
+use crate::{log_info, log_warn, POSITION_VALUE};
 use crate::mem::types::{MemData, MemMap};
 use crate::util::result::{Error, ErrorType};
 use core::alloc::{GlobalAlloc, Layout};
@@ -57,9 +57,19 @@ impl InternalBoundaryTagFrameAllocator {
         let data_page_count = (manage_pages - 1) as u32;
 
         unsafe {
+            #[cfg(all(feature = "enable_memory_poisoning", feature = "enable_overprotective_safety_checks"))]
+            core::ptr::write_bytes(
+                arg_target.start as *mut u8,
+                POSITION_VALUE,
+                manage_len
+            );
+
+            #[cfg(all(feature = "enable_memory_poisoning", not(feature = "enable_overprotective_safety_checks")))]
+            unsafe { (arg_target.start as *mut u32).add(1).write(0x2F2F2F2F); }
+
             (arg_target.start as *mut u32).write(data_page_count);
 
-            let data_end_tag_addr = table_start_addr - core::mem::size_of::<u32>();
+            let data_end_tag_addr = table_start_addr - size_of::<u32>();
             (data_end_tag_addr as *mut u32).write(data_page_count);
 
             table_ptr.as_ptr().write(data_start_page_idx);
@@ -211,8 +221,20 @@ impl InternalBoundaryTagFrameAllocator {
                 let new_start_page = start_page + pages_needed;
                 let new_available_pages = available_pages - pages_needed;
 
+                #[cfg(all(feature = "enable_memory_poisoning", feature = "enable_overprotective_safety_checks"))]
+                {
+                    let check_ptr = (start_addr + 4) as *const u8;
+                    let check_len = if layout.size() > 4 { layout.size() - 4 } else { 0 };
+
+                    for offset in 0..check_len {
+                        if unsafe{check_ptr.add(offset).read()} != POSITION_VALUE {
+                            log_warn!("kernel", "alloc", "corruption at {:#x}", start_addr + 4 + offset);
+                            break;
+                        }
+                    }
+                }
+
                 if new_available_pages == 0 {
-                    // このブロックを使い切ったので管理簿から削除
                     remove(
                         self.table_ptr.start.as_ptr(),
                         i as usize,
@@ -220,8 +242,6 @@ impl InternalBoundaryTagFrameAllocator {
                     );
                     self.table_len -= 1;
                 } else {
-                    // 残りがある場合、新しい開始位置を管理簿に書き込み、
-                    // その新しい先頭位置に残りページ数を記録する
                     entry_ptr.write(new_start_page);
                     let new_start_addr = (new_start_page as usize) << 12;
                     (new_start_addr as *mut u32).write(new_available_pages);
@@ -229,8 +249,6 @@ impl InternalBoundaryTagFrameAllocator {
 
                 let _ = self.try_add_table_map();
 
-                // 確保した領域の先頭（start_addr）を返す。
-                // ページ単位なので必ず4096(および8)の倍数になる。
                 return start_addr as *mut u8;
             }
         }
@@ -241,6 +259,14 @@ impl InternalBoundaryTagFrameAllocator {
         let size = layout.size();
         let start_addr = (ptr as usize) & !4095;
         let end_addr = (ptr as usize + size + 4095) & !4095;
+
+        #[cfg(feature = "enable_memory_poisoning")]
+        {
+            let range_size = end_addr - start_addr;
+            unsafe {
+                core::ptr::write_bytes(start_addr as *mut u8, POSITION_VALUE, range_size);
+            }
+        }
 
         let page_idx = (start_addr >> 12) as u32;
         let mut page_count = ((end_addr - start_addr) >> 12) as u32;
@@ -298,7 +324,7 @@ impl InternalBoundaryTagFrameAllocator {
             page_idx,
             self.table_len as usize,
         );
-        self.table_len += 1; // 【重要】これを忘れるとエントリが増えません
+        self.table_len += 1;
     }
 
     pub(crate) unsafe fn alloc_zeroed(&mut self, layout: Layout) -> *mut u8 {
@@ -350,7 +376,6 @@ impl InternalBoundaryTagFrameAllocator {
             return ptr;
         }
 
-        // --- 最適化3: 後ろのページを吸収して拡張する ---
         let old_end_page = (old_end >> 12) as u32;
         let new_end_page = (new_end >> 12) as u32;
         let need_pages = (new_end_page - old_end_page) as usize;
@@ -359,14 +384,24 @@ impl InternalBoundaryTagFrameAllocator {
             let entry_ptr = unsafe { self.table_ptr.start.as_ptr().add(i as usize) };
             let existing_loc = unsafe { entry_ptr.read() };
 
-            // 自分のすぐ後ろが空きブロックの開始地点か？
             if existing_loc == old_end_page {
                 let existing_addr = (existing_loc as usize) << 12;
                 let existing_size = unsafe { (existing_addr as *const u32).read() } as usize;
 
-                // 空きブロックが、必要なページ数以上を持っているか？
                 if existing_size >= need_pages {
-                    // --- 吸収成功！ ---
+                    #[cfg(all(feature = "enable_memory_poisoning", feature = "enable_overprotective_safety_checks"))]
+                    {
+                        let check_ptr = (existing_loc + 4) as *const u8;
+                        let check_len = if existing_size > 4 { existing_size - 4 } else { 0 };
+
+                        for offset in 0..check_len {
+                            if unsafe{check_ptr.add(offset).read()} != POSITION_VALUE {
+                                log_warn!("kernel", "alloc", "corruption at {:#x}", (existing_loc + 4 + offset as u32));
+                                break;
+                            }
+                        }
+                    }
+
                     unsafe {
                         if existing_size == need_pages {
                             remove(

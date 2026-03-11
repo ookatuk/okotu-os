@@ -15,14 +15,16 @@ fn calculate_dir_hash(dir_path: &str) -> io::Result<String> {
         .filter(|e| e.file_type().is_file())
         .collect();
 
-    entries.sort_by(|a, b| a.path().cmp(b.path()));
+    entries.sort_unstable_by(|a, b| a.path().cmp(b.path()));
 
     // 2. 各ファイルの内容をハッシュ計算機に流し込む
     for entry in entries {
         let mut file = File::open(entry.path())?;
         let mut buffer = [0; 8192];
 
-        hasher.update(entry.path().to_string_lossy().as_bytes());
+        let path = entry.path();
+        let relative_path = path.strip_prefix(dir_path).unwrap();
+        hasher.update(relative_path.to_string_lossy().as_bytes());
 
         loop {
             let count = file.read(&mut buffer)?;
@@ -63,9 +65,6 @@ fn main() {
     let build_temp_dir = env::temp_dir().join("ookatuks_os_log_viewer_build");
 
     let status = Command::new("cargo")
-        .env_clear() // 親の環境変数を全消し
-        .env("PATH", env::var("PATH").unwrap())
-        .env("HOME", env::var("HOME").unwrap())
         .env("RUSTFLAGS", "")
         .args(&[
             "build",
@@ -116,14 +115,22 @@ fn main() {
     );
 
     let hash = Command::new("git")
-        .args(&["rev-parse", "--short", "HEAD"])
+        .args(["rev-parse", "--short", "HEAD"])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_else(|| "unknown".into());
     let dir_hash = calculate_dir_hash(src_dir.to_str().unwrap()).unwrap();
 
-    println!("cargo:rustc-env=OS_BUILD={}", hash);
+    let rust_ver = Command::new("rustc")
+        .args(["--version"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_else(|| "unknown".into());
+
+    println!("cargo:rustc-env=OS_BUILD={}.{}", dir_hash, hash);
+    println!("cargo:rustc-env=RUST_VER={}", rust_ver.trim());
 
     let mut profile = std::env::var("PROFILE").unwrap();
 
@@ -131,7 +138,7 @@ fn main() {
         profile = "dev".to_string()
     }
 
-    println!("cargo:rustc-env=OS_PROFILE={}!{}", profile.trim(), dir_hash);
+    println!("cargo:rustc-env=OS_PROFILE={}", profile.trim());
 
     let cycle = std::env::var("OS_CYCLE").unwrap_or_else(|_| "dev".into());
     if cycle != profile {

@@ -1,3 +1,4 @@
+#![feature(abi_x86_interrupt)]
 #![no_std]
 #![no_main]
 
@@ -33,6 +34,8 @@ const ALLOW_RATIOS: &[(usize, usize)] =
 
 static MAIN_FONT: Once<Box<[u8]>> = Once::new();
 
+const POSITION_VALUE: u8 = 0x2F;
+
 unsafe extern "C" {
     static __ImageBase: u8;
 }
@@ -48,34 +51,35 @@ use crate::mem::types::{MemData, MemMap};
 use crate::util::result::Error;
 use crate::util::timer::TSC;
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
+use alloc::string::{ToString};
 use alloc::sync::Arc;
-use alloc::vec;
+use alloc::{format, vec};
 use alloc::vec::Vec;
 use bitflags::bitflags;
 use const_format::formatcp;
 use core::alloc::Layout;
 use core::arch::{asm, naked_asm};
-use core::cell::OnceCell;
+use core::arch::x86_64::_rdrand64_step;
 use core::cmp::PartialEq;
 use core::ffi::c_void;
 use core::hint::spin_loop;
 use core::num::NonZeroUsize;
 use core::panic::PanicInfo;
-use core::ptr::{NonNull, addr_of, null_mut};
+use core::pin::pin;
+use core::ptr::{NonNull, null_mut, addr_of};
 use core::sync::atomic::Ordering;
+use core::time::Duration;
+use acpi::sdt::hpet::HpetTable;
+use acpi::sdt::madt::{Madt, MadtEntry};
 use fontdue::Font;
 use num_traits::Zero;
-use serde::Deserialize;
 use spin::{Once, RwLock};
 use uefi::boot::{AllocateType, TimerTrigger, set_image_handle};
-use uefi::proto::console::gop::Mode;
 use uefi::proto::console::text::Key;
 use uefi::table::set_system_table;
-use uefi::{CStr16, Event, boot, cstr16, entry};
+use uefi::{CStr16, boot, cstr16, entry};
 use uefi_raw::table::boot::{EventType, Tpl};
 use uefi_raw::table::runtime::ResetType;
-use uefi_raw::table::system::SystemTable;
 use uefi_raw::{PhysicalAddress, Status};
 use util::result;
 use x86_64::instructions::interrupts::without_interrupts;
@@ -83,7 +87,7 @@ use x86_64::instructions::{interrupts, tlb};
 use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::registers::model_specific::Msr;
 use x86_64::structures::paging::{PageTable, PhysFrame};
-use x86_64::{PhysAddr, VirtAddr};
+use x86_64::{VirtAddr};
 
 mod cpu;
 mod fonts;
@@ -93,9 +97,13 @@ mod manager;
 mod mem;
 mod rng;
 mod util;
+mod table;
+
 #[global_allocator]
 /// 物理/仮想アロケーター.
 pub static ALLOC: OsAllocator = OsAllocator::new();
+
+static MAIN_PTR: Once<&'static Main> = Once::new();
 
 bitflags! {
     #[derive(Debug)]
@@ -161,6 +169,10 @@ struct StackData {
     pub len: usize,
 }
 
+#[derive(Debug, Default)]
+struct Helpers {
+}
+
 #[derive(Default)]
 #[repr(align(16))]
 struct Main {
@@ -174,6 +186,8 @@ struct Main {
 
     display_manager: DisplayManager,
     memory_manager: MemoryManager,
+
+    helpers: Helpers,
 }
 
 impl Main {
@@ -222,7 +236,7 @@ impl Main {
         ret
     }
 
-    #[cfg(feature = "enable_required_safety_checks")]
+    #[cfg(feature = "enable_stack_checks")]
     pub extern "efiapi" fn check_canaria(_event: uefi::Event, context: Option<NonNull<c_void>>) {
         let me = unsafe { &*(context.unwrap().as_ptr() as *mut Main) };
 
@@ -259,7 +273,7 @@ impl Main {
         }
     }
 
-    #[cfg(feature = "enable_required_safety_checks")]
+    #[cfg(feature = "enable_stack_checks")]
     fn enable_stack_canaria(&self) {
         log_info!("kernel", "canaria", "creating stack canaria");
         let (stack_top, stack_len) = without_interrupts(|| {
@@ -423,7 +437,7 @@ impl Main {
                             "kernel",
                             "memcheck",
                             "({} %) ({}) checking {:#X}",
-                            parent as u8,
+                            (parent*100.0) as u8,
                             val,
                             current_pos
                         );
@@ -594,7 +608,10 @@ impl Main {
         });
 
         let mut list = vec![
-            // マッピングから一部のページをｐresnetしないようにする
+            MemData {
+                start: 0,
+                len: self.memory_manager.max_addr.load(Ordering::SeqCst),
+            },
             MemData {
                 start: gop_ptr,
                 len: gop_len,
@@ -602,6 +619,8 @@ impl Main {
         ];
 
         let mut flag = vec![
+            PageEntryFlags::WRITABLE
+                | PageEntryFlags::EXECUTE_DISABLE,
             PageEntryFlags::WRITABLE
                 | PageEntryFlags::PRESENT
                 | PageEntryFlags::EXECUTE_DISABLE
@@ -768,7 +787,7 @@ impl Main {
         Ok(())
     }
 
-    pub unsafe extern "C" fn main(&self, stack_top: u64, stack_len: u64) -> ! {
+    pub unsafe extern "C" fn main(&'static self, stack_top: u64, stack_len: u64) -> ! {
         {
             without_interrupts(|| {
                 let mut lock = self.stack_data.write();
@@ -776,8 +795,10 @@ impl Main {
                 lock.len = stack_len as usize;
             });
 
-            #[cfg(feature = "enable_required_safety_checks")]
+            #[cfg(feature = "enable_stack_checks")]
             self.enable_stack_canaria();
+
+            MAIN_PTR.call_once(|| {self});
 
             log_info!("kernel", "thread safe", "creating gs...");
 
@@ -934,10 +955,6 @@ impl Main {
 
         self.exit_uefi().expect("failed to exit uefi.");
 
-        deb!("a");
-
-        self.display_manager.do_load_grap_in_now();
-
         loop {
             spin_loop();
         }
@@ -1014,6 +1031,13 @@ mod _internal_init {
                 "{}, 0x{:x}",
                 unsafe { cpu::utils::get_vendor_name() },
                 unsafe { utils::cpuid(cpu::utils::cpuid::common::PIAFB, None) }.eax
+            );
+            log_debug!(
+                "debug",
+                "build info",
+                "{}({})",
+                VERSION,
+                env!("RUST_VER")
             );
         }
     }
@@ -1133,12 +1157,22 @@ fn panic(info: &PanicInfo) -> ! {
     let message = info.to_string();
     let loc = info.location().unwrap().to_string();
 
+    log_last!("kernel", "panic", "panic raised.");
+    log_last!("kernel", "panic", "version: {}", VERSION);
+    log_last!("kernel", "panic", "build version: {}", env!("RUST_VER"));
+
     log_last!("kernel", "panic", "{}\n{}", loc, message);
+
+    #[cfg(not(feature = "disable_panic_restarts"))]
+    let tmp_text = format!("System will restart in {} seconds", PANICED_TO_RESTART_TIME);
+    #[cfg(feature = "disable_panic_restarts")]
+    let tmp_text = "".to_string();
+
     log_last!(
         "kernel",
         "panic",
-        "A critical system error has occurred. System will restart in {} seconds. for system admin: (info: {}, by: {})",
-        PANICED_TO_RESTART_TIME,
+        "A critical system error has occurred. {}. for system admin: (info: {}, by: {})",
+        tmp_text,
         info.message(),
         info.location().unwrap()
     );
@@ -1147,3 +1181,6 @@ fn panic(info: &PanicInfo) -> ! {
         spin_loop()
     }
 }
+
+unsafe impl Send for Main {}
+unsafe impl Sync for Main {}

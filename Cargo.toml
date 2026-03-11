@@ -4,12 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["enable_uart_outputs", "enable_normal_safety_checks", "enable_syscall_arg_checks", "include_boot_option_to_memcheck"]
+default = ["enable_uart_outputs", "enable_normal_safety_checks", "enable_syscall_arg_checks", "include_boot_option_to_memcheck", "enable_log", "enable_stack_checks", "enable_memory_poisoning"]
 
-features_enable_debug_mode = ["enable_debug_outputs", "enable_debug_level_outputs", "enable_overprotective_safety_checks"]
+features_enable_debug_mode = ["enable_debug_outputs", "enable_overprotective_safety_checks"]
 
-enable_debug_outputs = []
-enable_debug_level_outputs = []
+enable_debug_outputs = ["enable_debug_level_outputs"]
+enable_debug_level_outputs = ["enable_log"]
+
+enable_log = []
 
 enable_lldb_debug = []
 
@@ -19,16 +21,20 @@ include_boot_option_to_memcheck = ["enable_boot_option"]
 
 enable_boot_option = []
 
+
 enable_uart_outputs = ["bincode", "uart_16550"]
 
 enable_essential_safety_checks = []
 enable_required_safety_checks = ["enable_essential_safety_checks"]
-
 enable_normal_safety_checks = ["enable_required_safety_checks"]
 
 enable_overprotective_safety_checks = ["enable_normal_safety_checks"]
 
+enable_stack_checks = []
 enable_syscall_arg_checks = []
+enable_memory_poisoning = []
+
+disable_panic_restarts = []
 
 [dependencies]
 uefi = { version = "0.36.1", features = ["alloc", "logger"], default-features = false }
@@ -39,7 +45,7 @@ rustybuzz = { version = "0.14.1", default-features = false, features = ["libm"],
 spin = "0.10.0"
 bitflags = "2.10.0"
 miniz_oxide = { version = "0.9.0", default-features = false, features = ["with-alloc"] }
-proc-bitfield = { version = "0.5.3", default-features = false, features = ["nightly"] }
+proc-bitfield = { version = "0.5.3", default-features = false, features = ["nightly", "gce"] }
 num-traits = {version = "0.2.19", default-features = false }
 serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
 x86_64 = { version = "0.15.4", features = ["instructions", "nightly"] }
@@ -50,9 +56,15 @@ itertools = { version = "0.14.0", default-features = false, features = ["use_all
 num-derive = "0.4.2"
 x86 = "0.52.0"
 const_format = { version = "0.2.35", features = ["all"] }
+aml = { version = "0.16.4", default-features = false }
+bitfield = {version = "0.19.4", default-features = false }
+local_macros = { path = "local_macros" }
+
+rhai = { version = "1.24.0", default-features = false, features = ["no_std", "sync"] }
+core-error = { version = "0.0.0", default-features = false, features = ["alloc"] }
 
 [build-dependencies]
-sha2 = "0.11.0-rc.5"
+sha2 = "0.10.9"
 walkdir = "2.5.0"
 hex = "0.4.3"
 

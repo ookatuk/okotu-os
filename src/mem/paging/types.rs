@@ -16,7 +16,7 @@ use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::{PhysAddr, VirtAddr};
 
 const PT_SIZE: usize = 4096;
-const PHY_OFFSET: usize = 0;
+pub const PHY_OFFSET: usize = 0;
 
 const RELAY_FLAGS: PageEntryFlags = PageEntryFlags::from_bits_retain(
     PageEntryFlags::PRESENT.bits()
@@ -384,7 +384,7 @@ pub fn normalize_map_list(map_list: &mut Vec<MemData<usize>>, flags: &mut Vec<Pa
         final_list.push((new_range, new_flag));
     }
 
-    final_list.sort_by_key(|(map, _)| map.start);
+    final_list.sort_unstable_by_key(|(map, _)| map.start);
 
     let mut merged: Vec<(MemData<usize>, PageEntryFlags)> = Vec::new();
     if let Some(first) = final_list.first().cloned() {

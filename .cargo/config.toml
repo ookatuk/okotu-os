@@ -15,6 +15,7 @@ rustflags = [
     "-C", "code-model=kernel",
     "-C", "link-arg=-z",
     "-C", "link-arg=/ALIGN:4096",
+    "--cfg", 'getrandom_backend="rdrand"',
 ]
 
 runner = "sh ./scripts/run.sh"

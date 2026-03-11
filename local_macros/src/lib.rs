@@ -1,122 +1,97 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-    punctuated::Punctuated,
-    parenthesized,
-    Ident, Token, Type,
-};
+use syn::{parse_macro_input, parse::{Parse, ParseStream}, Token, LitInt, Path, Result};
 
-// 一行分の定義: func_name, (args...), ReturnType
-struct ApiDefinition {
-    name: Ident,
-    args: Punctuated<Type, Token![,]>,
-    ret_type: Type,
+// 引数をパースするための構造体定義
+struct IdtArgs {
+    count: usize,
+    handler: Path,
 }
 
-// 複数の定義をまとめる
-struct ApiDefinitions {
-    defs: Punctuated<ApiDefinition, Token![,]>,
-}
-
-impl Parse for ApiDefinitions {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut defs = Punctuated::new();
-        while !input.is_empty() {
-            let name: Ident = input.parse()?;
-            input.parse::<Token![,]>()?;
-
-            // カッコ内の型リストをパース
-            let content;
-            parenthesized!(content in input);
-            let args = content.parse_terminated(Type::parse, Token![,])?;
-
-            input.parse::<Token![,]>()?;
-            let ret_type: Type = input.parse()?;
-
-            defs.push(ApiDefinition { name, args, ret_type });
-
-            // 次の定義がある場合はカンマを消費
-            if input.peek(Token![,]) {
-                input.parse::<Token![,]>()?;
-            }
-        }
-        Ok(ApiDefinitions { defs })
+impl Parse for IdtArgs {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let count_lit: LitInt = input.parse()?; // 255
+        input.parse::<Token![,]>()?;            // ,
+        let handler: Path = input.parse()?;     // InterruptHelper::func
+        Ok(IdtArgs {
+            count: count_lit.base10_parse()?,
+            handler,
+        })
     }
 }
+
 
 #[proc_macro]
-pub fn define_api(input: TokenStream) -> TokenStream {
-    let ApiDefinitions { defs } = parse_macro_input!(input as ApiDefinitions);
+pub fn generate_idt_entries(input: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(input as IdtArgs);
+    let count = args.count;
+    let common_handler = &args.handler;
 
-    let mut struct_fields = Vec::new();
-    let mut static_inits = Vec::new();
-    let mut extern_decls = Vec::new();
+    let mut handlers = quote!();
+    let mut table_elements = quote!();
 
-    for def in defs {
-        let name = &def.name;
-        let ret_type = &def.ret_type;
-        let arg_types: Vec<_> = def.args.iter().collect();
+    // CPUがエラーコードを積むインデックス
+    let error_code_indices = [8, 10, 11, 12, 13, 14, 17, 21, 29, 30];
 
-        // 1. 構造体のフィールド型: extern "C" fn(u8, u32) -> String
-        struct_fields.push(quote! {
-            pub #name: extern "C" fn(#(#arg_types),*) -> #ret_type
-        });
+    for i in 0..=count {
+        let name = format_ident!("handler_{}", i.to_string());
+        let is_error = error_code_indices.contains(&(i as i32));
 
-        // 2. static変数の初期化: func_1: func_1
-        static_inits.push(quote! {
-            #name: #name
-        });
-
-        // 3. extern "C" ブロック用の引数名生成: (arg0: u8, arg1: u32)
-        let arg_idents: Vec<_> = (0..arg_types.len())
-            .map(|i| format_ident!("arg{}", i))
-            .collect();
-
-        extern_decls.push(quote! {
-            pub fn #name(#(#arg_idents: #arg_types),*) -> #ret_type;
-        });
-    }
-
-    quote! {
-        #[repr(C)]
-        pub struct ApiTable {
-            #(#struct_fields),*
-        }
-
-        #[unsafe(no_mangle)]
-        pub static API_TABLE: ApiTable = ApiTable {
-            #(#static_inits),*
+        // エラーコードがない例外は 0 を push して RawEntryArgs.error_code の位置を揃える
+        let push_zero = if is_error {
+            quote! { "", }
+        } else {
+            quote! { "push 0", }
         };
-    }.into()
-}
 
-#[proc_macro]
-pub fn call_api(input: TokenStream) -> TokenStream {
-    let ApiDefinitions { defs } = parse_macro_input!(input as ApiDefinitions);
+        handlers.extend(quote! {
+            #[unsafe(naked)]
+            pub unsafe extern "C" fn #name() {
+                core::arch::naked_asm!(
+                    "endbr64",
+                    #push_zero
+                    "push rax", "push rcx", "push rdx", "push rsi", "push rdi",
+                    "push r8", "push r9", "push r10", "push r11",
 
-    let mut struct_fields = Vec::new();
+                    "lea rdi, [rsp + 72]",
+                    "mov rsi, {idx}",
 
-    for def in defs {
-        let name = &def.name;
-        let ret_type = &def.ret_type;
-        let arg_types: Vec<_> = def.args.iter().collect();
+                    "sub rsp, 40",
+                    "call {target}",
+                    "add rsp, 40",
 
-        struct_fields.push(quote! {
-            pub #name: extern "C" fn(#(#arg_types),*) -> #ret_type
+                    "pop r11", "pop r10", "pop r9", "pop r8",
+                    "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rax",
+
+                    "add rsp, 8",
+                    "iretq",
+                    idx = const #i,
+                    target = sym #common_handler,
+                );
+            }
         });
+        table_elements.extend(quote! { #name, });
     }
 
     quote! {
-        #[repr(C)]
-        pub struct ApiTable {
-            #(#struct_fields),*
-        }
+        pub mod macro_idt {
+            use x86_64::structures::idt::{InterruptDescriptorTable, Entry, HandlerFunc};
+            use x86_64::VirtAddr;
 
-        impl ApiTable {
-            pub unsafe fn from_ptr(ptr: *const u8) -> &'static Self {
-                &*(ptr as *const Self)
+            #handlers
+
+            pub static IDT_METHODS: [unsafe extern "C" fn(); #count + 1] = [ #table_elements ];
+
+            pub fn init_all(idt: &mut InterruptDescriptorTable) {
+                let ptr = idt as *mut InterruptDescriptorTable as *mut Entry<HandlerFunc>;
+                for i in 0..=#count {
+                    let addr = VirtAddr::new(IDT_METHODS[i] as u64);
+                    unsafe {
+                        let mut entry = Entry::<HandlerFunc>::missing();
+                        entry.set_handler_addr(addr);
+                        core::ptr::write(ptr.add(i), entry);
+                    }
+                }
             }
         }
     }.into()

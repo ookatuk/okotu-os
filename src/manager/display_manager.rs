@@ -117,10 +117,13 @@ impl DisplayManager {
 
                     let (did_it_bar_color, do_it_bar_color) =
                         if me.last_log.lock().last_level == "last" {
-                            me.last_log.lock().last_time += 1;
-                            if me.last_log.lock().last_time as usize * GUI_WAIT == 100_000_000 {
-                                log_custom!("s", "ds", "dis", "");
-                                runtime::reset(ResetType::COLD, Status::LOAD_ERROR, None);
+                            #[cfg(not(feature = "disable_panic_restarts"))]
+                            {
+                                me.last_log.lock().last_time += 1;
+                                if me.last_log.lock().last_time as usize * GUI_WAIT == 100_000_000 {
+                                    log_custom!("s", "ds", "dis", "");
+                                    runtime::reset(ResetType::COLD, Status::LOAD_ERROR, None);
+                                }
                             }
                             (Color::new(1.0, 0.0, 0.0), Color::new(1.0, 0.0, 0.0))
                         } else {

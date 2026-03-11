@@ -1,17 +1,19 @@
+use rhai::TypeBuilder;
 use crate::cpu;
 use alloc::boxed::Box;
 use core::arch::asm;
 use core::ops::{Deref, DerefMut};
 use core::ptr::addr_of;
+use rhai::CustomType;
 
 #[repr(Rust, align(16))]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, CustomType)]
 pub struct GsMainData {
     pub cpu_id: u32,
 }
 
 #[repr(C, align(16))]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, CustomType)]
 pub struct Gs {
     pub self_ptr: u64,
     pub app_stack: u64,

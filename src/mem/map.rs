@@ -47,7 +47,7 @@ pub struct MemMapping(pub(crate) Vec<Map>);
 
 impl MemMapping {
     pub fn sort(&mut self) {
-        self.0.sort_by_key(|m| m.data.start)
+        self.0.sort_unstable_by_key(|m| m.data.start)
     }
 
     pub fn check(&self) -> bool {

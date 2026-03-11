@@ -1,8 +1,10 @@
 use alloc::borrow::Cow;
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
-use core::any::type_name;
-use core::fmt::{Display, Formatter};
+use alloc::sync::Arc;
+use core::any::{type_name, Any, TypeId};
+use core::fmt::{Debug, Display, Formatter};
 
 pub type Result<Output = ()> = core::result::Result<Output, Error>;
 
@@ -15,6 +17,7 @@ pub enum ErrorType {
     FileNotFound,
     UefiError(uefi::Error),
     OtherError,
+    Other(Arc<dyn Debug>),
     NotFound,
     OverFlow,
     InternalError,
@@ -22,12 +25,20 @@ pub enum ErrorType {
     DeviceError,
     ReadError,
     NotAFile,
+    AcpiError(acpi::AcpiError),
+    IndexMax,
+    AlreadyUsed,
 }
 
 impl ErrorType {
     #[inline]
     const fn from_uefi(status: uefi::Error) -> Self {
         ErrorType::UefiError(status)
+    }
+
+    #[inline]
+    const fn from_acpi(status: acpi::AcpiError) -> Self {
+        ErrorType::AcpiError(status)
     }
 }
 
@@ -37,6 +48,7 @@ impl Display for ErrorType {
         f.write_fmt(format_args!("{:?}", self))
     }
 }
+
 
 unsafe impl Send for ErrorType {}
 unsafe impl Sync for ErrorType {}
@@ -79,31 +91,38 @@ impl Error {
     }
 
     #[inline]
-    #[deprecated(note = "`try_raise` is easier.")]
-    pub fn try_from_uefi(
-        status: uefi::Result,
-        desc: Option<&'static str>,
-    ) -> core::result::Result<Self, ()> {
-        let mut error_type = Error::try_from(status)?;
-
-        error_type.message = desc.map(Cow::Borrowed);
-
-        Ok(error_type)
+    pub const fn from_acpi(status: acpi::AcpiError, desc: Option<&'static str>) -> Self {
+        Error::new(ErrorType::from_acpi(status), desc)
     }
 
-    #[inline]
-    pub fn try_raise<T>(status: uefi::Result<T>, desc: Option<&'static str>) -> Result<T> {
-        if status.is_ok() {
-            return Ok(unsafe { status.unwrap_unchecked() }); // 大丈夫なのは確定
+    pub fn try_raise<T, E: 'static + Debug>(status: core::result::Result<T, E>, desc: Option<&'static str>) -> Result<T> {
+        match status {
+            Ok(val) => Ok(val),
+            Err(error) => {
+                let any_err = &error as &dyn Any;
+
+                if let Some(acpi_err) = any_err.downcast_ref::<acpi::AcpiError>() {
+
+                    Self::from_acpi(acpi_err.clone(), desc).raise()
+
+                } else if let Some(uefi_err) = any_err.downcast_ref::<uefi::Error>() {
+
+                    Self::from_uefi(uefi_err.clone(), desc).raise()
+
+                } else if let Some(me) = any_err.downcast_ref::<Error>() {
+
+                    me.clone().raise()
+
+                } else {
+                    let error: Arc<dyn Debug> = Arc::new(error);
+
+                    Err(Self::new(
+                        ErrorType::Other(error),
+                        desc
+                    ))
+                }
+            }
         }
-        let error = unsafe { status.unwrap_err_unchecked() };
-        Self::from_uefi(error, desc).raise()
-    }
-
-    #[inline]
-    pub fn external<E: core::fmt::Debug>(err: E) -> Self {
-        let msg = type_name::<E>();
-        Self::new_string(ErrorType::OtherError, Some(format!("{}({:?})", msg, err)))
     }
 }
 
@@ -111,19 +130,6 @@ impl From<uefi::Error> for Error {
     #[inline]
     fn from(status: uefi::Error) -> Self {
         Self::from_uefi(status, None)
-    }
-}
-
-impl<T: core::fmt::Debug> TryFrom<uefi::Result<T>> for Error {
-    type Error = ();
-
-    #[inline]
-    fn try_from(value: uefi::Result<T>) -> core::result::Result<Self, Self::Error> {
-        if value.is_ok() {
-            return Err(());
-        }
-
-        Ok(unsafe { Self::from(value.unwrap_err_unchecked()) })
     }
 }
 
@@ -137,6 +143,17 @@ impl Display for Error {
     }
 }
 
+impl From<Error> for Box<rhai::EvalAltResult> {
+    fn from(err: Error) -> Self {
+        Box::new(rhai::EvalAltResult::ErrorSystem(
+            format!("{}", err),
+            Box::new(err)
+        ))
+    }
+}
+
 impl core::error::Error for Error {}
 unsafe impl Send for Error {}
 unsafe impl Sync for Error {}
+
+impl core_error::Error for Error {}

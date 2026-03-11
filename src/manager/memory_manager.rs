@@ -170,8 +170,10 @@ impl MemoryManager {
             let si = (end - start) as u64;
             size += si;
 
+            log_info!("kernel", "memory", "...({})", l);
+
             crate::ALLOC.os_allocator.get().unwrap().add(&vec![MemData {
-                start: start,
+                start,
                 len: si as usize,
             }]);
             l += 1;

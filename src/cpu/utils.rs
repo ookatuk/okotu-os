@@ -170,7 +170,6 @@ pub unsafe fn get_cpu_vendor() -> CpuVendor {
     }
 }
 
-#[inline]
 pub fn who_am_i() -> u32 {
     let gs = crate::mem::thread_safe::get_mut();
     if let Some(gs) = &gs

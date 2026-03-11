@@ -1,8 +1,10 @@
+use rhai::TypeBuilder;
 use crate::ALLOW_RATIOS;
 use crate::util::result::{Error, ErrorType};
 use crate::{log_debug, log_info, result};
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
+use rhai::CustomType;
 use uefi::boot::ScopedProtocol;
 use uefi::proto::console::gop::{BltOp, GraphicsOutput, PixelFormat};
 use uefi_raw::protocol::console::PixelBitmask;
@@ -26,7 +28,7 @@ const fn scale_f32_to_mask(intensity: f32, mask: u32) -> u32 {
     val << shift
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, CustomType)]
 pub struct Color {
     pub r: f32,
     pub g: f32,
