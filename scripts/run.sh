@@ -9,7 +9,7 @@ WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$RUNING_DIR" || return
 
 # 内部初期化スクリプトの実行
-sh "$SCRIPT_DIR/internal_init_script.sh"
+bash "$SCRIPT_DIR/internal_init_script.sh"
 
 EFI_PATH=$1
 shift

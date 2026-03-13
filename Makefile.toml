@@ -2,15 +2,52 @@
 skip_core_tasks = true
 
 [tasks.build]
-command = "cargo"
-args = ["build", "${@}"]
+script = [
+    "cargo build ${@}"
+]
+
+# ---
+[tasks._iso_common]
+script = [ # 引数引き継ぐため
+    "cargo make build --release ${@}",
+]
 
 [tasks.iso]
+extend = "_iso_common"
 script = [
-    "cargo make build --release ${@}",
     "sh ./scripts/build_iso.sh ${@}"
 ]
 
+[tasks.iso.windows]
+extend = "_iso_common"
+script = [
+    "call .\\scripts\\build_iso.bat ${@}"
+]
+# ---
+# ---
+[tasks.init_project]
+script = [
+    "bash ./init.sh"
+]
+
+[tasks.init_project.windows]
+script = [
+    "call .\\init.sh"
+]
+# ---
+[tasks.update_microcode]
+script = [
+    "bash ./scripts/get_microcode.sh"
+]
+
+[tasks.update_microcode.windows]
+script = [
+    "call .\\scripts\\get_microcode.bat"
+]
+# ---
+
+
 [tasks.run]
+script_runner = "${TARGET_SHELL}"
 command = "cargo"
 args = ["run", "${@}"]

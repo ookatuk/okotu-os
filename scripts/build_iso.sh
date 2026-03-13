@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 set -e
 
@@ -9,7 +9,7 @@ WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$RUNING_DIR" || return
 
-sh "$SCRIPT_DIR/internal_init_script.sh"
+bash "$SCRIPT_DIR/internal_init_script.sh"
 
 
 ISO_ROOT="$WORKSPACE_ROOT/esp"
