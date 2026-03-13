@@ -1,15 +1,11 @@
 [config]
 skip_core_tasks = true
 
-[tasks.build]
-script = [
-    "cargo build ${@}"
-]
 
 # ---
 [tasks._iso_common]
 script = [ # 引数引き継ぐため
-    "cargo make build --release ${@}",
+    "cargo build --release ${@}",
 ]
 
 [tasks.iso]

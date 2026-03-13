@@ -1,3 +1,10 @@
+## Index
+- [Features](#features)
+- [build dependencies](#builddebug-dependencies)
+- [How to Init](#how-to-init)
+- [How to Build](#how-to-build)
+- [what is log_viewer](#what-is-the-logviewer-git-module)
+
 ## features
 * loading screen **before** `exit_boot_services`
 * HDR support (both pre/post exit_boot_services)
@@ -21,13 +28,18 @@
 * mkfs.msdos(dosfstools)
 * ovmf
 
-## how to build?
+## how to init?
 
 > [!NOTE]
 > Primary development is done on Linux.
 > While `.bat` files are provided for Windows,
 > they are experimental.
 > **WSL2 is highly recommended** for a stable build environment.
+> [!NOTE]
+> *Build System Internals*
+> Most cargo make tasks are simple wrappers around the scripts in `scripts/`.
+> You can achieve the same results by,
+> manually executing the corresponding script file(just avoid those starting with `internal_`).
 
 1. install `cargo-make`
 > run 
@@ -38,14 +50,14 @@
 2. init project
 > ```
 > cargo make init_project
-> ```
-> or 
-> ```
+> # or
 > ./init.(sh/bat)
 > ```
 
 > [!TIP]
 > `scripts/internal_init_script` is a common initialization script for Linux builds, not for the entire project. 
+
+## how to build?
 
 * if you need iso,
 
@@ -56,11 +68,6 @@
 
 * if you need efi,
 
-> run 
-> ```
-> cargo make build
-> ```
-> or
 > run 
 > ```
 > cargo build
@@ -75,14 +82,11 @@
 > cargo make update_microcode
 > ```
 
-> [!TIP]
-> If you want to run the Official Log Viewer (in native Linux / GUI support version WSL)
+## What is the `log_viewer` git module?
+> Official log viewer.
+> 
+> If you want to run (in native Linux / GUI support version WSL)
 >
-> run 
-> ```
-> cargo make run
-> ```
-> or run 
 > ```
 > cargo run
 > ```
