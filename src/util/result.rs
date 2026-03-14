@@ -3,7 +3,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
-use core::any::{Any, TypeId, type_name};
+use core::any::Any;
 use core::fmt::{Debug, Display, Formatter};
 
 pub type Result<Output = ()> = core::result::Result<Output, Error>;
@@ -119,6 +119,15 @@ impl Error {
             }
         }
     }
+
+    #[inline]
+    pub fn from_option<T>(
+        data: Option<T>,
+        e_type: ErrorType,
+        desc: Option<&'static str>,
+    ) -> Result<T> {
+        data.ok_or_else(|| Error::new(e_type, desc))
+    }
 }
 
 impl From<uefi::Error> for Error {
@@ -152,4 +161,3 @@ unsafe impl Send for Error {}
 unsafe impl Sync for Error {}
 
 impl core_error::Error for Error {}
-

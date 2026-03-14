@@ -9,15 +9,8 @@ const OS_CYCLE: &str = "dev";
 
 const MICRO_VER: u32 = 0;
 
-const VERSION: &str = formatcp!(
-    "{}-v2-{VERSION_RAW}_{MICRO_VER}-build-{}.{}",
-    OS_CYCLE,
-    env!("OS_PROFILE"),
-    env!("OS_BUILD"),
-);
-
 /// OSプロトコルバージョン.
-const DEBUG_PROTOCOL_VERSION: &str = "1.0";
+const DEBUG_PROTOCOL_VERSION: &str = "2.0";
 
 const LINE_SPACING: f32 = 1.5;
 
@@ -49,29 +42,30 @@ use crate::mem::allocator::main::OsAllocator;
 use crate::mem::map::MemoryMapType;
 use crate::mem::paging::types::{PageEntryFlags, PageLevel, get_addr};
 use crate::mem::types::{MemData, MemMap};
+use crate::util::os_version::OS_VERSION;
 use crate::util::result::Error;
 use crate::util::timer::TSC;
+use acpi::sdt::hpet::HpetTable;
+use acpi::sdt::madt::{Madt, MadtEntry};
 use alloc::boxed::Box;
-use alloc::string::{ToString};
+use alloc::string::ToString;
 use alloc::sync::Arc;
-use alloc::{format, vec};
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use bitflags::bitflags;
 use const_format::formatcp;
 use core::alloc::Layout;
-use core::arch::{asm, naked_asm};
 use core::arch::x86_64::_rdrand64_step;
+use core::arch::{asm, naked_asm};
 use core::cmp::PartialEq;
 use core::ffi::c_void;
 use core::hint::spin_loop;
 use core::num::NonZeroUsize;
 use core::panic::PanicInfo;
 use core::pin::pin;
-use core::ptr::{NonNull, null_mut, addr_of};
+use core::ptr::{NonNull, addr_of, null_mut};
 use core::sync::atomic::Ordering;
 use core::time::Duration;
-use acpi::sdt::hpet::HpetTable;
-use acpi::sdt::madt::{Madt, MadtEntry};
 use fontdue::Font;
 use num_traits::Zero;
 use spin::{Once, RwLock};
@@ -83,12 +77,12 @@ use uefi_raw::table::boot::{EventType, Tpl};
 use uefi_raw::table::runtime::ResetType;
 use uefi_raw::{PhysicalAddress, Status};
 use util::result;
+use x86_64::VirtAddr;
 use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::instructions::{interrupts, tlb};
 use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::registers::model_specific::Msr;
 use x86_64::structures::paging::{PageTable, PhysFrame};
-use x86_64::{VirtAddr};
 
 mod cpu;
 mod fonts;
@@ -97,8 +91,8 @@ mod io;
 mod manager;
 mod mem;
 mod rng;
-mod util;
 mod table;
+mod util;
 
 #[global_allocator]
 /// 物理/仮想アロケーター.
@@ -171,8 +165,7 @@ struct StackData {
 }
 
 #[derive(Debug, Default)]
-struct Helpers {
-}
+struct Helpers {}
 
 #[derive(Default)]
 #[repr(align(16))]
@@ -438,7 +431,7 @@ impl Main {
                             "kernel",
                             "memcheck",
                             "({} %) ({}) checking {:#X}",
-                            (parent*100.0) as u8,
+                            (parent * 100.0) as u8,
                             val,
                             current_pos
                         );
@@ -620,8 +613,7 @@ impl Main {
         ];
 
         let mut flag = vec![
-            PageEntryFlags::WRITABLE
-                | PageEntryFlags::EXECUTE_DISABLE,
+            PageEntryFlags::WRITABLE | PageEntryFlags::EXECUTE_DISABLE,
             PageEntryFlags::WRITABLE
                 | PageEntryFlags::PRESENT
                 | PageEntryFlags::EXECUTE_DISABLE
@@ -737,6 +729,7 @@ impl Main {
 
         let page_frame = PhysFrame::containing_address(page.phys);
 
+        mem::paging::types::set_current(page);
         unsafe {
             Cr3::write(page_frame, Cr3Flags::empty());
         }
@@ -799,7 +792,7 @@ impl Main {
             #[cfg(feature = "enable_stack_checks")]
             self.enable_stack_canaria();
 
-            MAIN_PTR.call_once(|| {self});
+            MAIN_PTR.call_once(|| self);
 
             log_info!("kernel", "thread safe", "creating gs...");
 
@@ -964,11 +957,12 @@ impl Main {
 
 mod _internal_init {
     use crate::cpu::utils;
-    use crate::{DEBUG_PROTOCOL_VERSION, Main, VERSION, cpu, io, log_custom, log_debug, util};
+    use crate::{DEBUG_PROTOCOL_VERSION, Main, cpu, io, log_custom, log_debug, log_info, util};
     use core::alloc::Layout;
     use core::ptr;
     use uefi::runtime;
 
+    use crate::util::os_version::OS_VERSION;
     #[cfg(feature = "enable_lldb_debug")]
     use core::arch::asm;
 
@@ -1022,7 +1016,8 @@ mod _internal_init {
                 0
             }
         );
-        log_custom!("s", "ds", "v", "{}", VERSION);
+        log_custom!("s", "ds", "v", "{}", OS_VERSION);
+        log_info!("debug", "build info", "{}", OS_VERSION);
         log_custom!("s", "ds", "pv", "{}", DEBUG_PROTOCOL_VERSION);
 
         if cfg!(feature = "enable_debug_outputs") {
@@ -1033,13 +1028,8 @@ mod _internal_init {
                 unsafe { cpu::utils::get_vendor_name() },
                 unsafe { utils::cpuid(cpu::utils::cpuid::common::PIAFB, None) }.eax
             );
-            log_debug!(
-                "debug",
-                "build info",
-                "{}({})",
-                VERSION,
-                env!("RUST_VER")
-            );
+
+            log_debug!("debug", "full os info", "{:?}", OS_VERSION)
         }
     }
 
@@ -1158,21 +1148,25 @@ fn panic(info: &PanicInfo) -> ! {
     let message = info.to_string();
     let loc = info.location().unwrap().to_string();
 
+    util::logger::LOG_CAPACITY.store(0, Ordering::SeqCst);
+
     log_last!("kernel", "panic", "panic raised.");
-    log_last!("kernel", "panic", "version: {}", VERSION);
-    log_last!("kernel", "panic", "build version: {}", env!("RUST_VER"));
+    log_last!("kernel", "panic", "version: {:?}", OS_VERSION);
 
     log_last!("kernel", "panic", "{}\n{}", loc, message);
 
     #[cfg(not(feature = "disable_panic_restarts"))]
-    let tmp_text = format!("System will restart in {} seconds", PANICED_TO_RESTART_TIME);
+    let tmp_text = format!(
+        "System will restart in {} seconds. ",
+        PANICED_TO_RESTART_TIME
+    );
     #[cfg(feature = "disable_panic_restarts")]
     let tmp_text = "".to_string();
 
     log_last!(
         "kernel",
         "panic",
-        "A critical system error has occurred. {}. for system admin: (info: {}, by: {})",
+        "A critical system error has occurred. {}for system admin: (info: {}, by: {})",
         tmp_text,
         info.message(),
         info.location().unwrap()

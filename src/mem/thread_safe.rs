@@ -1,15 +1,42 @@
-use rhai::TypeBuilder;
 use crate::cpu;
+use crate::mem::paging::types::TopPageTable;
 use alloc::boxed::Box;
 use core::arch::asm;
 use core::ops::{Deref, DerefMut};
-use core::ptr::addr_of;
 use rhai::CustomType;
+use rhai::TypeBuilder;
 
-#[repr(Rust, align(16))]
+#[repr(Rust)]
+#[derive(Debug, Default, Clone)]
+pub struct GsMainDataNotCustom {
+    pub page_table: Option<TopPageTable>,
+}
+
+impl CustomType for GsMainDataNotCustom {
+    fn build(_: TypeBuilder<Self>) {}
+}
+
+#[repr(Rust)]
 #[derive(Debug, Default, Clone, CustomType)]
 pub struct GsMainData {
     pub cpu_id: u32,
+    pub sub: GsMainDataNotCustom,
+}
+
+impl Deref for GsMainData {
+    type Target = GsMainDataNotCustom;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.sub
+    }
+}
+
+impl DerefMut for GsMainData {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sub
+    }
 }
 
 #[repr(C, align(16))]
@@ -66,18 +93,18 @@ pub unsafe fn init_gs(app_stack: *const u8, kernel_stack: *const u8) {
     ptr.self_ptr = (ptr as *mut Gs).addr() as u64;
 
     unsafe {
-        cpu::utils::write_msr(
-            cpu::utils::msr::common::GS_BASE,
-            addr_of!(ptr).addr() as u64,
-        )
-    };
-
-    unsafe {
         asm!(
-            "mov {tmp:e}, ds",
-            "mov gs, {tmp:e}",
-            tmp = out(reg) _,
-            options(nostack, preserves_flags, nomem)
+        "mov {tmp:e}, 0x08",
+        "mov gs, {tmp:e}",
+        tmp = out(reg) _,
+        options(nostack, preserves_flags, nomem)
         );
     }
+
+    unsafe {
+        cpu::utils::write_msr(
+            cpu::utils::msr::common::GS_BASE,
+            (ptr as *const Gs).addr() as u64,
+        )
+    };
 }

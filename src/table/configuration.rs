@@ -1,11 +1,10 @@
-use acpi::{AcpiTables, PhysicalMapping};
-use crate::util::result::Error;
-use uefi_raw::Guid;
-use uefi_raw::table::system::SystemTable;
-use crate::{deb, log_info};
 use crate::table::TmpHandler;
 use crate::util::result;
+use crate::util::result::Error;
 use crate::util::result::ErrorType;
+use acpi::AcpiTables;
+use uefi_raw::Guid;
+use uefi_raw::table::system::SystemTable;
 
 use uefi::guid;
 
@@ -35,23 +34,14 @@ pub fn get_apic_use_tmp_handler(st: &SystemTable) -> result::Result<AcpiTables<T
         }
     }
 
-    if test.is_none() {
-        return Error::new(
-            ErrorType::NotFound,
-            Some("Rsdp not found")
-        ).raise();
-    }
-    let test = test.unwrap();
+    let test = Error::from_option(test, ErrorType::NotFound, Some("Rsdp not found"))?;
 
     let res = unsafe {
         let a = TmpHandler::new();
 
         Error::try_raise(
-            AcpiTables::from_rsdp(
-                a,
-                test.addr()
-            ),
-        Some("Rsdp not found")
+            AcpiTables::from_rsdp(a, test.addr()),
+            Some("Rsdp not found"),
         )?
     };
 

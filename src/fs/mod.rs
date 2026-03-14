@@ -1,7 +1,7 @@
+use crate::util::result;
 use uefi::proto::loaded_image::LoadedImage;
 use uefi::proto::media::file::Directory;
 use uefi::proto::media::fs::SimpleFileSystem;
-use crate::util::result;
 
 /// ルートを取得する
 /// # Returns
@@ -18,13 +18,11 @@ pub fn get_root() -> result::Result<Directory> {
 
     let my_image = uefi::boot::open_protocol_exclusive::<LoadedImage>(my_handle)?;
 
-    let drive = my_image.device();
-    if drive.is_none() {
-        return result::Error::new(
-            result::ErrorType::FileNotFound,
-            Some("Could not open my image drive")
-        ).raise();
-    }
+    let drive = result::Error::from_option(
+        my_image.device(),
+        result::ErrorType::FileNotFound,
+        Some("Could not open my image drive"),
+    )?;
 
-    Ok(uefi::boot::open_protocol_exclusive::<SimpleFileSystem>(unsafe{drive.unwrap_unchecked()})?.open_volume()?)  // noneじゃないからチェックいらん
+    Ok(uefi::boot::open_protocol_exclusive::<SimpleFileSystem>(drive)?.open_volume()?) // noneじゃないからチェックいらん
 }

@@ -62,6 +62,7 @@ local_macros = { path = "local_macros" }
 
 rhai = { version = "1.24.0", default-features = false, features = ["no_std", "sync"] }
 core-error = { version = "0.0.0", default-features = false, features = ["alloc"] }
+const-str = "1.1.0"
 
 [build-dependencies]
 sha2 = "0.10.9"

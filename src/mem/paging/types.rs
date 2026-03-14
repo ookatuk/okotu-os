@@ -1,12 +1,14 @@
 use crate::mem::types::MemData;
 use crate::util::result;
 use crate::util::result::{Error, ErrorType};
+use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::bitflags;
 use core::alloc::Layout;
 use core::cmp::PartialEq;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+use rhai::CustomType;
 use x86::bits64::paging::{
     PAddr, PDEntry, PDFlags, PDPTEntry, PDPTFlags, PML4Entry, PML4Flags, PML5Entry, PML5Flags,
     PTEntry, PTFlags,
@@ -144,11 +146,28 @@ impl PageLevel {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TopPageTable {
     pub phys: PhysAddr,
     pub virt: VirtAddr,
     pub level: PageLevel,
-    pub ptr: &'static mut PageTable,
+    pub memory_mapping: (Vec<MemData<usize>>, Vec<PageEntryFlags>),
+}
+
+impl CustomType for TopPageTable {
+    fn build(mut builder: rhai::TypeBuilder<Self>) {
+        builder.with_set("set_addr", |me: &mut Self, value: i64| {
+            let virt_addr = VirtAddr::new(value as u64);
+            let phys_addr = crate::mem::paging::types::get_addr(virt_addr);
+            me.virt = virt_addr;
+        });
+    }
+}
+
+impl TopPageTable {
+    pub fn ptr(&self) -> &'static mut PageTable {
+        unsafe { &mut *(self.virt.as_mut_ptr() as *mut PageTable) }
+    }
 }
 
 pub fn create_page_table(
@@ -196,8 +215,15 @@ pub fn create_page_table(
         phys,
         virt: VirtAddr::new(phys.as_u64() + PHY_OFFSET as u64),
         level: target,
-        ptr: unsafe { &mut *(ptr) },
+        memory_mapping: (vec![], vec![]),
     })
+}
+
+#[inline]
+pub fn set_current(table: TopPageTable) {
+    let item = crate::mem::thread_safe::get_mut().unwrap();
+
+    item.page_table = Some(table);
 }
 
 fn create_recursive(

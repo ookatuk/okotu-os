@@ -1,20 +1,16 @@
 use crate::util::result::{self, ErrorType};
 use spin::Once;
-use x86_64::{
-    VirtAddr,
-    instructions::interrupts::without_interrupts,
-    structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
-};
+use x86_64::VirtAddr;
 
 static LAPIC_BASE_ADDR: Once<VirtAddr> = Once::new();
 
-static ID: usize = 0x020 / 4;
-static EOI: usize = 0x0B0 / 4;
-static ICR_LOW: usize = 0x300 / 4;
-static ICR_HIGH: usize = 0x310 / 4;
-static LVT: usize = 0x320 / 4;
-static TIMER_DIV: usize = 0x3E0 / 4;
-static INITIAL: usize = 0x380 / 4;
+const ID: usize = 0x020 / 4;
+const EOI: usize = 0x0B0 / 4;
+const ICR_LOW: usize = 0x300 / 4;
+const ICR_HIGH: usize = 0x310 / 4;
+const LVT: usize = 0x320 / 4;
+const TIMER_DIV: usize = 0x3E0 / 4;
+const INITIAL: usize = 0x380 / 4;
 
 pub enum LapicOffset {
     LocalApicId,

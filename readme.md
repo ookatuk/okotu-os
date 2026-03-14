@@ -7,7 +7,7 @@
 
 ## features
 * loading screen **before** `exit_boot_services`
-* HDR support (both pre/post exit_boot_services)
+* Deep Color (10-bit) Support
 * **True Type Font(ttf)** support
 ###  Enable/disable features during build
 
@@ -43,12 +43,13 @@
 
 1. install `cargo-make`
 > run 
-> ```
+> ```bash
 > cargo install cargo-make
 > ```
 
 2. init project
-> ```
+
+> ```bash
 > cargo make init_project
 > # or
 > ./init.(sh/bat)
@@ -62,14 +63,14 @@
 * if you need iso,
 
 > run 
-> ```
+> ```bash
 > cargo make iso
 > ```
 
 * if you need efi,
 
 > run 
-> ```
+> ```bash
 > cargo build
 > ```
 
@@ -78,7 +79,7 @@
 > Microcode is prepared during the `cargo make init_project` phase, but it is **not** automatically updated or downloaded during runtime by the OS. 
 >
 > If you need to manually refresh or fetch the latest microcode after the initial setup, use the following task:
-> ```
+> ```bash
 > cargo make update_microcode
 > ```
 
@@ -87,6 +88,6 @@
 > 
 > If you want to run (in native Linux / GUI support version WSL)
 >
-> ```
+> ```bash
 > cargo run
 > ```

@@ -174,6 +174,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-str"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18f12cc9948ed9604230cdddc7c86e270f9401ccbe3c2e98a4378c5e7632212f"
+
+[[package]]
 name = "const_fn"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -746,6 +752,7 @@ dependencies = [
  "bincode",
  "bitfield",
  "bitflags 2.10.0",
+ "const-str",
  "const_format",
  "core-error",
  "fontdue",

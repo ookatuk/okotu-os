@@ -213,9 +213,8 @@ unsafe fn find_good_file(vendor_enum: CpuVendor) -> result::Result<RangePtr> {
         )?
         .into_directory();
 
-        if contents_dir.is_none() {
-            return Error::new(ErrorType::InvalidFileType, Some("Not a dir")).raise();
-        }
+        let mut contents_dir =
+            Error::from_option(contents_dir, ErrorType::InvalidFileType, Some("Not a dir"))?;
 
         let mut buf = vec![0u16; vendor_name.len() + 1];
 
@@ -230,20 +229,14 @@ unsafe fn find_good_file(vendor_enum: CpuVendor) -> result::Result<RangePtr> {
         let ret = unsafe { ret.unwrap_unchecked() };
 
         let ucode_dir = Error::try_raise(
-            unsafe {
-                contents_dir
-                    .unwrap_unchecked()
-                    .open(ret, FileMode::Read, FileAttribute::DIRECTORY)
-            },
+            { contents_dir.open(ret, FileMode::Read, FileAttribute::DIRECTORY) },
             Some("Cloud not found Dir."),
         )?
         .into_directory();
 
-        if ucode_dir.is_none() {
-            return Error::new(ErrorType::InvalidFileType, Some("Not a dir")).raise();
-        }
+        let mut ucode_dir =
+            Error::from_option(ucode_dir, ErrorType::InvalidFileType, Some("Not a dir"))?;
 
-        let mut ucode_dir = unsafe { ucode_dir.unwrap_unchecked() };
         let filename = match vendor_enum {
             CpuVendor::Intel => {
                 let sig = unsafe { utils::cpuid(utils::cpuid::common::PIAFB, None) }.eax;
@@ -333,15 +326,11 @@ unsafe fn find_good_file(vendor_enum: CpuVendor) -> result::Result<RangePtr> {
         target_path
     };
 
-    if target_path.is_none() {
-        return Error::new(
-            ErrorType::NotSupported,
-            Some("No matching files were found."),
-        )
-        .raise();
-    }
-
-    let mut target_path = unsafe { target_path.unwrap_unchecked() };
+    let mut target_path = Error::from_option(
+        target_path,
+        ErrorType::NotSupported,
+        Some("No matching files were found."),
+    )?;
 
     let size: Box<FileInfo> = target_path.get_boxed_info()?;
     let size = size.file_size();

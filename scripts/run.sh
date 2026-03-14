@@ -35,23 +35,24 @@ if [ -d "$WORKSPACE_ROOT/contents" ]; then
     cp -r "$WORKSPACE_ROOT/contents" "$WORKSPACE_ROOT/esp/EFI/BOOT"
 fi
 
-# 6. QEMU 実行
-# -bios の代わりに pflash を使い、CODE(読み取り専用)とVARS(書き込み可)を分離
+echo "$CODE, $VARS_TMP"
+
 qemu-system-x86_64 \
   -enable-kvm \
-  -cpu host \
+  -cpu host,migratable=no,+invtsc \
   -m "$MEM" \
-  -smp 2 \
+  -smp 12,sockets=1,cores=6,threads=2 \
   -machine q35 \
   -drive if=pflash,format=raw,readonly=on,file="$CODE" \
   -drive if=pflash,format=raw,file="$VARS_TMP" \
   -drive file=fat:rw:"$WORKSPACE_ROOT/esp",format=raw \
   -serial pipe:"$WORKSPACE_ROOT/serial_pipe" \
   -device virtio-gpu-pci \
-  -display gtk,gl=on \
+  -display gtk,zoom-to-fit=on \
+  -rtc base=localtime,clock=host \
+  -global kvm-pit.lost_tick_policy=delay \
   -no-reboot \
-  -no-shutdown \
-  "$@"
+  -no-shutdown
 
 # 終了処理
 wait $VIEWER_PID

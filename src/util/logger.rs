@@ -4,11 +4,15 @@ use crate::util::timer::TSC;
 use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
-use core::fmt::Display;
+use bincode::enc::write::Writer;
+use bincode::error::EncodeError;
+use core::fmt::{Display, Write};
+use core::ops::{Deref, DerefMut};
 use core::panic::Location;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use serde::Serialize;
 use spin::{Lazy, RwLock};
+use uart_16550::SerialPort;
 use x86_64::instructions::interrupts;
 
 pub static LOG_CAPACITY: AtomicUsize = AtomicUsize::new(5000);
@@ -19,17 +23,7 @@ pub(crate) static LOG_BUF: Lazy<RwLock<VecDeque<Arc<OsLog>>>> =
 static LOG_HEAD_ID: AtomicUsize = AtomicUsize::new(0); // 0番目の要素の通算ID
 
 pub fn add_log(data: &OsLog) {
-    let log = Arc::new(OsLog {
-        level: data.level,
-        by: data.by,
-        tag: data.tag,
-        data: data.data.clone(),
-        file: data.file,
-        time: data.time,
-        line: data.line,
-        column: data.column,
-        cpu_acpi_id: data.cpu_acpi_id,
-    });
+    let log = Arc::new(data.clone());
 
     interrupts::without_interrupts(|| {
         let mut lock = LOG_BUF.write();
@@ -41,7 +35,7 @@ pub fn add_log(data: &OsLog) {
         }
 
         if lock.len() == cap {
-            lock.remove(0);
+            lock.pop_front();
             LOG_HEAD_ID.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -74,7 +68,7 @@ pub struct LogIterator {
 }
 
 impl LogIterator {
-    pub fn new(start_id: usize, include_system: bool) -> Self {
+    pub const fn new(start_id: usize, include_system: bool) -> Self {
         Self {
             next_id: start_id,
             include_system,
@@ -238,22 +232,40 @@ pub fn _real_custom_internal(
 
     #[cfg(feature = "enable_uart_outputs")]
     {
-        let a = bincode::serde::encode_to_vec(data, bincode::config::standard());
+        interrupts::without_interrupts(|| {
+            let mut lk_lock = SERIAL1.lock();
+            let mut lk = UartTmp(lk_lock.deref_mut());
+            lk.send_raw(0xAA);
+            lk.send_raw(0xBB);
+            lk.send_raw(0xCC);
+            lk.send_raw(0xEE);
 
-        if let Ok(data) = a {
-            interrupts::without_interrupts(|| {
-                let mut lk = SERIAL1.lock();
-                lk.send_raw(0xAA);
-                lk.send_raw(0xBB);
-                lk.send_raw(0xCC);
-                lk.send_raw(0xEE);
-                for i in (data.len() as u32).to_le_bytes() {
-                    lk.send_raw(i);
-                }
-                for i in data {
-                    lk.send_raw(i);
-                }
-            })
+            let _ = bincode::serde::encode_into_writer(data, lk, bincode::config::standard());
+        })
+    }
+}
+
+struct UartTmp<'a>(&'a mut SerialPort);
+
+impl Writer for UartTmp<'_> {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), EncodeError> {
+        for i in bytes.iter() {
+            self.0.send_raw(*i);
         }
+
+        Ok(())
+    }
+}
+
+impl Deref for UartTmp<'_> {
+    type Target = SerialPort;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for UartTmp<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
