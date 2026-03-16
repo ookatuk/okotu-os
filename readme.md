@@ -1,15 +1,16 @@
 ## Index
 - [Features](#features)
-- [build dependencies](#builddebug-dependencies)
+- [Build/Debug Dependencies](#builddebug-dependencies)
 - [How to Init](#how-to-init)
 - [How to Build](#how-to-build)
-- [what is log_viewer](#what-is-the-logviewer-git-module)
+- [What is the `log_viewer` git module?](#what-is-the-logviewer-git-module)
 
-## features
-* loading screen **before** `exit_boot_services`
+## Features
+* Loading screen **before** `exit_boot_services`
 * Deep Color (10-bit) Support
 * **True Type Font(ttf)** support
-###  Enable/disable features during build
+
+### Enable/disable features during build
 
 #### Runtime checks
 * [x] Essentials
@@ -21,34 +22,32 @@
 * [ ] **Ligatures**: Powered by `rustybizz`. Available both before and after `exit_boot_services`.
 * [x] **UART and more!**: See `Cargo.toml` for details.
 
-## build/debug dependencies
+## Build/Debug Dependencies
 
 * qemu-system-x86_64
 * xorriso
 * mkfs.msdos(dosfstools)
 * ovmf
 
-## how to init?
+## How to Init?
 
-> [!NOTE]
-> Primary development is done on Linux.
-> While `.bat` files are provided for Windows,
-> they are experimental.
-> **WSL2 is highly recommended** for a stable build environment.
+> [!IMPORTANT]
+> **Windows Compatibility & Environment**
+> While we are currently planning to expand Windows support (including the creation of `.bat` files), the environment is still under development.
+> **We strongly recommend using WSL2** for a stable and supported build environment at this time.
+
 > [!NOTE]
 > *Build System Internals*
 > Most cargo make tasks are simple wrappers around the scripts in `scripts/`.
-> You can achieve the same results by,
-> manually executing the corresponding script file(just avoid those starting with `internal_`).
+> You can achieve the same results by manually executing the corresponding script file (just avoid those starting with `internal_`).
 
-1. install `cargo-make`
-> run 
+1. Install `cargo-make`
+> Run:
 > ```bash
 > cargo install cargo-make
 > ```
 
-2. init project
-
+2. Init project
 > ```bash
 > cargo make init_project
 > # or
@@ -56,27 +55,25 @@
 > ```
 
 > [!TIP]
-> `scripts/internal_init_script` is a common initialization script for Linux builds, not for the entire project. 
+> `scripts/internal_init_script` is a common initialization script for Linux builds, not for the entire project.
 
-## how to build?
+## How to Build?
 
-* if you need iso,
-
-> run 
+* If you need ISO:
+> Run:
 > ```bash
 > cargo make iso
 > ```
 
-* if you need efi,
-
-> run 
+* If you need EFI:
+> Run:
 > ```bash
 > cargo build
 > ```
 
 > [!WARNING]
-> **Microcode Notice**: 
-> Microcode is prepared during the `cargo make init_project` phase, but it is **not** automatically updated or downloaded during runtime by the OS. 
+> **Microcode Notice**:
+> Microcode is prepared during the `cargo make init_project` phase, but it is **not** automatically updated or downloaded during runtime by the OS.
 >
 > If you need to manually refresh or fetch the latest microcode after the initial setup, use the following task:
 > ```bash
@@ -84,10 +81,14 @@
 > ```
 
 ## What is the `log_viewer` git module?
-> Official log viewer.
-> 
-> If you want to run (in native Linux / GUI support version WSL)
+> This is the official log viewer.
 >
+> Please note that this module is hosted in a separate repository. To use it, you must **request access** to the repository or **request the pre-compiled binary** from the maintainers.
+>
+> Once obtained, place the executable in the following directory:
+> `bin/log_viewer`
+>
+> To run it (requires native Linux or WSL with GUI support):
 > ```bash
 > cargo run
 > ```

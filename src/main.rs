@@ -1,13 +1,16 @@
 #![feature(abi_x86_interrupt)]
+#![feature(const_slice_make_iter)]
+
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
 const VERSION_RAW: &str = "1.0.0";
-const OS_CYCLE: &str = "dev";
 
 const MICRO_VER: u32 = 0;
+
+const OS_NAME: &str = "test_os_v2";
 
 /// OSプロトコルバージョン.
 const DEBUG_PROTOCOL_VERSION: &str = "2.0";
@@ -42,7 +45,6 @@ use crate::mem::allocator::main::OsAllocator;
 use crate::mem::map::MemoryMapType;
 use crate::mem::paging::types::{PageEntryFlags, PageLevel, get_addr};
 use crate::mem::types::{MemData, MemMap};
-use crate::util::os_version::OS_VERSION;
 use crate::util::result::Error;
 use crate::util::timer::TSC;
 use acpi::sdt::hpet::HpetTable;
@@ -962,7 +964,6 @@ mod _internal_init {
     use core::ptr;
     use uefi::runtime;
 
-    use crate::util::os_version::OS_VERSION;
     #[cfg(feature = "enable_lldb_debug")]
     use core::arch::asm;
 
@@ -1016,8 +1017,8 @@ mod _internal_init {
                 0
             }
         );
-        log_custom!("s", "ds", "v", "{}", OS_VERSION);
-        log_info!("debug", "build info", "{}", OS_VERSION);
+        log_custom!("s", "ds", "v", "{}", "0");
+        log_info!("debug", "build info", "{}", "0");
         log_custom!("s", "ds", "pv", "{}", DEBUG_PROTOCOL_VERSION);
 
         if cfg!(feature = "enable_debug_outputs") {
@@ -1029,7 +1030,7 @@ mod _internal_init {
                 unsafe { utils::cpuid(cpu::utils::cpuid::common::PIAFB, None) }.eax
             );
 
-            log_debug!("debug", "full os info", "{:?}", OS_VERSION)
+            log_debug!("debug", "full os info", "{:?}", "0")
         }
     }
 
@@ -1151,7 +1152,7 @@ fn panic(info: &PanicInfo) -> ! {
     util::logger::LOG_CAPACITY.store(0, Ordering::SeqCst);
 
     log_last!("kernel", "panic", "panic raised.");
-    log_last!("kernel", "panic", "version: {:?}", OS_VERSION);
+    log_last!("kernel", "panic", "version: {:?}", "0");
 
     log_last!("kernel", "panic", "{}\n{}", loc, message);
 
