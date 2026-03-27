@@ -1,8 +1,8 @@
 use uefi::boot;
-use crate::util::result;
 use uefi::boot::{OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType};
 use uefi::proto::ProtocolPointer;
-use crate::util::result::{Error, ErrorType};
+use crate::result;
+use crate::result::{Error, ErrorType};
 
 pub fn open<P: ProtocolPointer + ?Sized>(index: Option<usize>) -> result::Result<ScopedProtocol<P>> {
     let handles = Error::try_raise(
