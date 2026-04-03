@@ -11,10 +11,7 @@ Also, there are cases where there are no comments at all.
 
 This readme is full of jokes,
 
-but that's only because my mental state is a bit off in an eccentric way.
-
-The content itself is perfectly normal, so please believe me.
-
+As this project is still in an early stage, commits may be large and development may be somewhat unstable.
 # Description
 
 for `x86_64-v2` OS.

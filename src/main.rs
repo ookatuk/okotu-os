@@ -146,8 +146,6 @@ impl Main {
         cpu::utils::init_gdt();
         interrupt::api::init();
 
-        x86_64::instructions::interrupts::
-
         drivers::disk::virt_io::a();
 
         log_last!("kernel", "info", "reached last.");

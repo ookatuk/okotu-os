@@ -2,15 +2,16 @@
 
 ## Supported Versions
 * [ ] old version
+* [ ] non-official branches
 * [x] Latest version of all official branches
 
 ## Reporting a Vulnerability
-Please contact us via email or using the official function.
+Please report vulnerabilities via email or GitHub Security Advisories.
 
-If the vulnerability is not easily exploitable, feel free to open an Issue or PR.
+For non-critical issues, you may open an Issue or Pull Request.
 
-Even minor questions are welcome.
+We also welcome reports of minor issues or concerns.
 
-We will investigate and report the results to you.
+We will investigate the report and respond with our findings.
 
 Thank you.
