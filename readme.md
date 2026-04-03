@@ -5,6 +5,10 @@
 > 
 > Also, because I'm inexperienced, the commit size is huge, so I can't guarantee proper development.
 
+> [!TIP]
+> Please note that many comments and commits are in Japanese.
+Also, there are cases where there are no comments at all.
+
 This readme is full of jokes,
 
 but that's only because my mental state is a bit off in an eccentric way.
