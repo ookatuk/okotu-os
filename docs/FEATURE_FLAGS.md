@@ -12,10 +12,8 @@
 
 ## Checks
 * [x] enable_essential_safety_checks / enable_required_safety_checks
-> Basic checks.
-
-> `essential` may vary depending on the environment.
-
+> Basic checks.\
+> `essential` may vary depending on the environment.\
 > `required`
 > are basic checks.
 
@@ -39,8 +37,7 @@
 > In most cases, using this in conjunction with debug_outputs is effective.
 
 * [x] enable_stack_checks
-> Enables stack canaries.
-
+> Enables stack canaries.\
 > Nothing else of note.
 
 * [x] enable_syscall_arg_checks
@@ -65,8 +62,7 @@
 > Disabling this requires viewing from within the OS or through memory, but it is faster.
 
 * [x] enable_log
-> Enables logging.
-
+> Enables logging.\
 > If disabled, only UART output is performed if the above option is enabled.
 
 ## UX
