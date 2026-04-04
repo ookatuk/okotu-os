@@ -20,7 +20,7 @@
 > [!important]
 > At the hardware level, within the expected range of this OS,
 >
-> If you are certain that nothing will be broken and you are certain that nothing will be broken, then disable it.
+> If you are absolutely certain that nothing will be broken, then disable it.
 
 > [!note]
 > This also includes ACPI table checks.
@@ -54,7 +54,7 @@
 > Uses `int3` before startup.
 
 * [ ] disable_panic_restarts
-> Enables automatic restart in case of panic.
+> Disables automatic restart in case of panic.
 
 ## Logging Related
 * [x] enable_uart_outputs
