@@ -2,9 +2,7 @@
 > An OS with many dependencies, seemingly meticulously designed but bit really.
 
 > [!IMPORTANT]
-> It's currently being rebuilt.
-> 
-> Also, because I'm inexperienced, the commit size is huge, so I can't guarantee proper development.
+> because I'm inexperienced, the commit size is huge, so I can't guarantee proper development.
 
 > [!TIP]
 > Please note that many comments and commits are in Japanese.
