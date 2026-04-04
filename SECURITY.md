@@ -1,7 +1,6 @@
 # Security Policy
 
 ## Supported Versions
-## Supported Versions
 * [x] All major versions (1.x, 2.x, etc.) unless explicitly stated as unsupported
 * [ ] Older minor versions (e.g., 1.1.x if current 1.x is 1.2.x)
 * [ ] Versions explicitly stated as unsupported
