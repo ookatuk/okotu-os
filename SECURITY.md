@@ -1,8 +1,9 @@
 # Security Policy
 
 ## Supported Versions
-* [ ] old version
-* [x] Latest version of all official branches
+* [x] All major versions (1.x, 2.x, etc.) unless explicitly stated as unsupported
+* [ ] Older minor versions (e.g., 1.1.x if current 1.x is 1.2.x)
+* [ ] Versions explicitly stated as unsupported
 
 ## Reporting a Vulnerability
 Please contact us via email or PR.
