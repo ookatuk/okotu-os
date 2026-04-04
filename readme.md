@@ -26,9 +26,6 @@ We plan to specify the app version in YAML instead of XML!
 > [!NOTE]
 > It's possible that compatibility with Linux will be handled through a special layer.
 
-## Other Docs
-* feature flag description [click here](./docs/FEATURE_FLAGS.md)
-
 ## Build/Debug Dependencies
 ### Build
 * xorriso
