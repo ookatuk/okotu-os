@@ -33,7 +33,7 @@ pub(super) fn custom_internal(
     let mut time = 0;
     if let Some(gs) = read_gs() {
         if gs.tsc_init {
-            time = TSC.get_time().as_secs();
+            time = TSC.get_time().as_millis() as u64;
         }
     }
     let cpu_acpi_id = crate::cpu::utils::who_am_i().unwrap_or(u32::MAX);

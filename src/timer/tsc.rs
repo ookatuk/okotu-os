@@ -15,13 +15,12 @@ pub static TSC: Lazy<Tsc> = Lazy::new(|| {
 #[derive(Debug, Default)]
 pub struct TscGsData {
     pub par_100ns: u64,
-    pub adjust: u64,
+    pub adjust: i64,
 }
 
 #[derive(Debug)]
 pub struct Tsc {
     pub is_invariant: bool,
-    pub par_100ns: AtomicU64,
     pub utc_offset: RwLock<Duration>,
 }
 
@@ -30,7 +29,6 @@ impl Tsc {
         let is_invariant = cpu_info!(environment::tsc::InvariantTsc);
         Self {
             is_invariant,
-            par_100ns: AtomicU64::new(0),
             utc_offset: RwLock::new(Duration::default()),
         }
     }
@@ -43,10 +41,6 @@ impl Tsc {
             }
             false
         }) {
-            return;
-        }
-
-        if self.is_invariant && self.par_100ns.load(Ordering::SeqCst) > 0 {
             return;
         }
 
@@ -68,28 +62,20 @@ impl Tsc {
             gs.tsc_init = true;
         });
 
-        if self.is_invariant {
-            self.par_100ns.store(par_100ns_value, Ordering::SeqCst);
-        } else {
-            with_interr(|| {
-                let gs = read_gs().unwrap();
-                gs.tsc_data.par_100ns = par_100ns_value;
-            });
-        }
+        with_interr(|| {
+            let gs = read_gs().unwrap();
+            gs.tsc_data.par_100ns = par_100ns_value;
+        });
     }
 
-    pub fn get_val(&self) -> u64 {
-        if self.is_invariant {
-            with_interr(|| {
-                let gs = read_gs().unwrap();
-                self.par_100ns.load(Ordering::Acquire) + gs.tsc_data.adjust
-            })
-        } else {
-            with_interr(|| {
-                let gs = read_gs().unwrap();
-                gs.tsc_data.par_100ns + gs.tsc_data.adjust
-            })
-        }
+    pub fn get_100ns(&self) -> u64 {
+        with_interr(|| {
+            let gs = read_gs().unwrap();
+            let common_tsc = Tsc::get() as i64 + gs.tsc_data.adjust;
+
+            let tsc_u64 = if common_tsc < 0 { 0 } else { common_tsc as u64 };
+            tsc_u64 / gs.tsc_data.par_100ns
+        })
     }
 
     #[inline]
@@ -114,22 +100,29 @@ impl const TimerConst for Tsc {
 
 impl Timer for Tsc {
     fn get_time(&self) -> Duration {
-        let current_tsc = Self::get() as u128;
-        let counts_per_100ns = self.get_val() as u128;
+        let gs = read_gs().unwrap();
+        if !gs.tsc_init || gs.tsc_data.par_100ns == 0 { return Duration::ZERO; }
 
-        if counts_per_100ns == 0 { return Duration::ZERO; }
+        let common = Tsc::get() as i64 + gs.tsc_data.adjust;
+        let common_u128 = if common < 0 { 0 } else { common as u128 };
 
-        let nanos = (current_tsc * 100) / counts_per_100ns;
+        let nanos = (common_u128 * 100) / gs.tsc_data.par_100ns as u128;
+
         Duration::from_nanos(nanos as u64)
     }
 
-
     fn spin(&self, wait: Duration) {
-        let start_tsc = Self::get();
-        let counts_per_100ns = self.get_val();
+        let start_tsc = Self::get() as u128;
 
-        let wait_counts = (wait.as_nanos() * counts_per_100ns as u128) / 100;
-        let target_tsc = start_tsc as u128 + wait_counts;
+        let counts_per_100ns = with_interr(|| {
+            read_gs().unwrap().tsc_data.par_100ns
+        }) as u128;
+
+        if counts_per_100ns == 0 { return; }
+
+        let wait_counts = (wait.as_nanos() * counts_per_100ns) / 100;
+
+        let target_tsc = start_tsc + wait_counts;
 
         while (Self::get() as u128) < target_tsc {
             spin_loop();

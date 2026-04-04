@@ -47,9 +47,8 @@ use alloc::{format};
 use alloc::string::ToString;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
-#[cfg(not(test))]
-use core::sync::atomic::Ordering;
 
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use alloc::{vec};
 use alloc::vec::Vec;
 use core::alloc::Layout;
@@ -75,7 +74,7 @@ use crate::memory::paging::{PageEntryFlags, PageLevel, TopPageTable};
 use crate::thread_local::read_gs;
 use crate::timer::rtc::RTC;
 use crate::timer::Timer;
-use crate::timer::tsc::TSC;
+use crate::timer::tsc::{Tsc, TSC};
 use crate::uefi_helper::boot::MyMemoryMapOwned;
 use crate::util::proto;
 use crate::util_types::MemRangeData;
@@ -119,12 +118,20 @@ pub struct ImagePtr {
 }
 
 #[derive(Default)]
+pub struct GlobalData {
+    pm_data: Once<(Vec<MemRangeData<usize>>, Vec<PageEntryFlags>)>,
+    timer: AtomicBool,
+    value: AtomicU64
+}
+
+#[derive(Default)]
 #[repr(align(16))]
 struct Main {
     stack_data: RwLock<StackData>,
     core_info: RwLock<Vec<u32>>,
     uefi_map: Once<MyMemoryMapOwned>,
-    test: AtomicUsize,
+    initialized_core_count: AtomicUsize,
+    global_data: GlobalData
 }
 static MAIN_COPY: Once<&'static Main> = Once::new();
 
@@ -166,53 +173,7 @@ impl Main {
 
         // drivers::disk::virt_io::a();
 
-        let len = with_interr(|| self.core_info.read().len());
-
-        let table = read_gs().unwrap().page_table.ptr();
-
-        let mut stacks = Vec::with_capacity(len);
-
-        for _ in 0..len {
-            let ptr = alloc::alloc::alloc(Layout::from_size_align(STACK_SIZE, 4096).unwrap());
-
-            if ptr.is_null() {
-                panic!("failed to allocate stack.");
-            }
-
-            stacks.push(ptr.add(STACK_SIZE));
-        }
-
-        self.util_update_add_paging::<true>(
-            stacks.iter().map(|x| {
-                let low = x.sub(STACK_SIZE);
-                MemRangeData::new(
-                    low.addr(),
-                    STACK_SIZE
-                )
-            }).collect(),
-            vec![PageEntryFlags::PRESENT | PageEntryFlags::WRITABLE; stacks.len()],
-        ).unwrap();
-
-        stacks.push(1 as *mut u8);
-
-        unsafe{asm!("wbinvd", options(nomem, nostack))};
-
-        multi_core::init::raw::init_trampoline::<false>(
-            Self::a as u64,
-            stacks.as_mut_slice(),
-            self.uefi_map.get().unwrap(),
-            table
-        ).unwrap();
-
-        broadcast_init_ipi_exc_self();
-        TSC.spin(Duration::from_millis(10));
-        for _ in 0..2 {
-            broadcast_ipi_exc_self(ICR_STARTUP, 0x08);
-            TSC.spin(Duration::from_micros(200));
-        }
-
-        TSC.spin(Duration::from_secs(5));
-        deb!("{}", (self.test.load(Ordering::Relaxed) as i32));
+        self.init_ap();
 
         log_last!("kernel", "info", "reached last.");
         loop {
@@ -220,18 +181,153 @@ impl Main {
         }
     }
 
-    pub fn a() -> ! {
-        let me = MAIN_COPY.get().unwrap();
+    fn init_ap(&'static self) {
+        let mut len = with_interr(|| self.core_info.read().len());
 
-        me.test();
+        { // 起動
+            let table = read_gs().unwrap().page_table.ptr();
+
+            let mut stacks = Vec::with_capacity(len);
+
+            for _ in 0..len {
+                let ptr = unsafe { alloc::alloc::alloc(Layout::from_size_align(STACK_SIZE, 4096).unwrap()) };
+
+                if ptr.is_null() {
+                    panic!("failed to allocate stack.");
+                }
+
+                stacks.push(unsafe { ptr.add(STACK_SIZE) });
+            }
+
+            self.util_update_add_paging::<true>(
+                stacks.iter().map(|x| {
+                    let low = unsafe { x.sub(STACK_SIZE) };
+                    MemRangeData::new(
+                        low.addr(),
+                        STACK_SIZE
+                    )
+                }).collect(),
+                vec![PageEntryFlags::PRESENT | PageEntryFlags::WRITABLE; stacks.len()],
+            ).unwrap();
+
+            stacks.push(1 as *mut u8);
+
+            unsafe { asm!("wbinvd", options(nomem, nostack)) };
+
+            unsafe {
+                multi_core::init::raw::init_trampoline::<false>(
+                    Self::ap_entry_point as u64,
+                    stacks.as_mut_slice(),
+                    self.uefi_map.get().unwrap(),
+                    table
+                ).unwrap();
+            }
+
+            self.global_data.pm_data.call_once(|| {
+                read_gs().unwrap().page_table.memory_mapping.clone()
+            });
+
+            unsafe { broadcast_init_ipi_exc_self() };
+            TSC.spin(Duration::from_millis(10));
+            for _ in 0..2 {
+                unsafe { broadcast_ipi_exc_self(ICR_STARTUP, 0x08) };
+                TSC.spin(Duration::from_micros(200));
+            }
+
+            let start = TSC.get_time() + Duration::from_secs(1);
+            with_interr(|| {
+                while self.initialized_core_count.load(Ordering::SeqCst) != len {
+                    if TSC.get_time() > start {
+                        len = self.initialized_core_count.load(Ordering::SeqCst);
+                        break;
+                    }
+                    spin_loop();
+                }
+            });
+            self.initialized_core_count.store(0, Ordering::SeqCst);
+        }
+
+        deb!("a {}", len);
+
+        {  // タイマー設定
+            self.global_data.value.store(0, Ordering::SeqCst);
+
+            with_interr(|| {
+                self.global_data.timer.store(true, Ordering::SeqCst);
+                TSC.spin(Duration::from_millis(100));
+                self.global_data.timer.store(false, Ordering::SeqCst);
+            });
+
+            while self.initialized_core_count.load(Ordering::SeqCst) < len {
+                spin_loop();
+            }
+
+            self.global_data.value.store(Tsc::get(), Ordering::SeqCst);
+
+            while self.initialized_core_count.load(Ordering::SeqCst) < len * 2 {
+                spin_loop();
+            }
+
+            // 4. 全員が通過したことを確認してからリセット
+            self.initialized_core_count.store(0, Ordering::SeqCst);
+        }
     }
 
-    pub fn test(&'static self) -> ! {
-        self.test.fetch_add(1, Ordering::Relaxed);
-        unsafe{thread_local::write_none()};
-        interrupt::api::init();
-        interrupts::enable();
-        self.util_update_add_paging::<false>(vec![], vec![]);
+    pub fn ap_entry_point() -> ! {
+        let me = MAIN_COPY.get().unwrap();
+
+        me.ap_init();
+    }
+
+    pub fn ap_init(&'static self) -> ! {
+        {
+            unsafe { thread_local::write_none() };
+            interrupt::api::init();
+            interrupts::enable();
+
+            let (mut a, mut b) = self.global_data.pm_data.get().unwrap().clone();
+            self.util_update_paging::<false>(
+                &mut a,
+                &mut b,
+            ).unwrap();
+        }
+        let gs = read_gs().unwrap();
+
+        self.initialized_core_count.fetch_add(1, Ordering::SeqCst);
+
+        {
+            while !self.global_data.timer.load(Ordering::SeqCst) {
+                spin_loop();
+            }
+            let start_tsc = Tsc::get();
+
+            while self.global_data.timer.load(Ordering::SeqCst) {
+                spin_loop();
+            }
+
+            let end_tsc = Tsc::get();
+            let total_tsc = end_tsc - start_tsc;
+
+            gs.tsc_data.par_100ns = total_tsc / 1_000_000;
+        }
+
+        {
+            self.initialized_core_count.fetch_add(1, Ordering::SeqCst);
+
+            let val = loop {
+                let v = self.global_data.value.load(Ordering::SeqCst);
+                if v != 0 { break v; }
+                spin_loop();
+            };
+
+            let current = Tsc::get();
+            gs.tsc_data.adjust = (val as i64) - (current as i64);
+
+            self.initialized_core_count.fetch_add(1, Ordering::SeqCst);
+        }
+
+
+        gs.tsc_init = true;
 
         loop {
             spin_loop();
