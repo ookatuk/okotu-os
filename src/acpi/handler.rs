@@ -5,7 +5,6 @@ use core::ptr::NonNull;
 use core::time::Duration;
 use acpi::{Handle, PciAddress, PhysicalMapping};
 use acpi::aml::AmlError;
-use aml::AmlHandle;
 use spin::{Lazy, Mutex, Once};
 use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::instructions::port::Port;

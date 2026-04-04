@@ -1,10 +1,8 @@
 #![feature(likely_unlikely)]
 #![feature(portable_simd)]
-#![feature(const_try)]
 #![feature(const_trait_impl)]
-#![feature(duration_integer_division)]
-#![feature(generic_const_exprs)]
 #![feature(abi_x86_interrupt)]
+#![feature(generic_const_exprs)]
 #![no_std]
 #![no_main]
 
@@ -27,6 +25,8 @@ const STACK_SIZE: usize = 1024 * 32;
 const ALLOCATOR_FIRST_CREATE_SIZE_OPTION_MAX_ALLOCATE_SIZE: usize = 1024 * 1024 * 1024 * 2;
 const ALLOCATOR_FIRST_CREATE_SIZE_OPTION_MIN_ALLOCATE_SIZE: usize = 4096 * 2;
 
+const ALLOCATOR_ADD_OFFSET: usize = 0x10000;
+
 #[allow(unused)]
 const POSITION_VALUE: u8 = 0x2F;
 
@@ -37,26 +37,21 @@ unsafe extern "C" {
 use alloc::{format, vec};
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use core::alloc::{GlobalAlloc, Layout};
 use core::arch::{naked_asm};
-use core::cmp::min;
 use core::ffi::c_void;
-use core::hint::{cold_path, spin_loop, unlikely};
+use core::hint::{spin_loop};
 use core::panic::PanicInfo;
-use core::ptr::{addr_of, null_mut};
-use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
+use core::sync::atomic::Ordering;
 use core::time::Duration;
-use spin::{Mutex, Once, RwLock};
+use spin::{Once, RwLock};
 use uefi::boot::{set_image_handle, AllocateType};
 use uefi::mem::memory_map::MemoryMap;
-use uefi::proto::pi::mp::Procedure;
 use uefi::table::set_system_table;
-use uefi_raw::table::boot::{EventType, MemoryType, Tpl, PAGE_SIZE};
-use x86_64::instructions::interrupts::{disable, without_interrupts};
+use uefi_raw::table::boot::{MemoryType, PAGE_SIZE};
+use x86_64::instructions::interrupts::{without_interrupts};
 use crate::cpu::cpu_id;
 use crate::cpu::utils::{get_vendor_name_raw, vendor_list};
 use crate::memory::paging::{PageEntryFlags, PageLevel};
-use crate::result::{Error, ErrorType};
 use crate::thread_local::read_gs;
 use crate::timer::rtc::RTC;
 use crate::timer::Timer;
@@ -85,6 +80,7 @@ pub mod send_and_get;
 pub mod drivers;
 pub mod interrupt;
 pub mod multi_core;
+pub mod apic_helper;
 
 #[global_allocator]
 /// 物理/仮想アロケーター.
@@ -145,6 +141,8 @@ impl Main {
 
         cpu::utils::init_gdt();
         interrupt::api::init();
+
+        apic_helper::init_local_apic();
 
         drivers::disk::virt_io::a();
 
@@ -221,7 +219,7 @@ impl Main {
             .unwrap_or(0);
 
         let (mut r, mut t) = {
-            let mut r = vec![
+            let r = vec![
                 PageEntryFlags::PRESENT | PageEntryFlags::WRITABLE | PageEntryFlags::EXECUTE_DISABLE
             ];
             let t = vec![MemRangeData::new(
@@ -251,8 +249,12 @@ impl Main {
         without_interrupts(|| {
             let lock = self.stack_data.read();
             t.push(MemRangeData::new(lock.top as usize, lock.len));
-            r.push(PageEntryFlags::PRESENT | PageEntryFlags::WRITABLE);
+            r.push(PageEntryFlags::PRESENT | PageEntryFlags::WRITABLE | PageEntryFlags::EXECUTE_DISABLE);
         });
+
+        t.push(MemRangeData::new(0, 4096));
+        r.push(PageEntryFlags::empty());
+
         Ok((t, r))
     }
 

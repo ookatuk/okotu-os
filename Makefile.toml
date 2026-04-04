@@ -28,7 +28,7 @@ script = [
 
 [tasks.init_project.windows]
 script = [
-    "call .\\init.sh"
+    "call .\\init.bat"
 ]
 # ---
 [tasks.update_microcode]

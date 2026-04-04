@@ -15,8 +15,8 @@ use crate::cpu::msr::read;
 use crate::thread_local::read_gs;
 use crate::util_types::SmartPtr;
 
-const DOUBLE_FAULT_STACK_ADDR: u16 = 1;
-const NMI_STACK_ADDR: u16 = 0;
+pub(crate) const DOUBLE_FAULT_STACK_ADDR: u16 = 1;
+pub(crate) const NMI_STACK_ADDR: u16 = 0;
 pub const STACK_SIZE: usize = 20480;
 
 pub static DATA: Once<Vec<NmiArgs>> = Once::new();
@@ -46,7 +46,7 @@ impl NmiArgs {
 
 #[repr(align(16))]
 pub struct IdtRawStacks {
-    data: Vec<SmartPtr<usize, crate::memory::physical_allocator::OsPhysicalAllocator>>
+    pub(crate) data: Vec<SmartPtr<usize, crate::memory::physical_allocator::OsPhysicalAllocator>>
 }
 
 impl Default for IdtRawStacks {
@@ -69,29 +69,6 @@ impl Default for IdtRawStacks {
             data,
         }
     }
-}
-
-lazy_static! {
-    static ref TSS: TaskStateSegment = {
-        let mut tss = TaskStateSegment::new();
-        let gs = read_gs().unwrap();
-
-        let stack_start_ptr = gs.idt_stack.data[0].get_addr() as *const u8;
-        let stack_start = VirtAddr::from_ptr(stack_start_ptr);
-
-        let stack_end = stack_start + 20480u64;
-
-        tss.interrupt_stack_table[NMI_STACK_ADDR as usize] = stack_end;
-
-        let stack_start_ptr = gs.idt_stack.data[1].get_addr() as *const u8;
-        let stack_start = VirtAddr::from_ptr(stack_start_ptr);
-
-        let stack_end = stack_start + 20480u64;
-
-        tss.interrupt_stack_table[DOUBLE_FAULT_STACK_ADDR as usize] = stack_end;
-
-        tss
-    };
 }
 
 extern "x86-interrupt" fn gp_handler(
@@ -205,6 +182,8 @@ extern "x86-interrupt" fn breakpoint_handler(
         log_error!("kernel", "breakpoint", "{:#?}", stack_frame);
         log_error!("kernel", "breakpoint", "------ end ------");
     }
+
+
 }
 
 extern "x86-interrupt" fn nmi_handler(
@@ -249,5 +228,6 @@ pub fn init() {
             PrivilegeLevel::Ring0
         ));
     };
+
     target.load();
 }

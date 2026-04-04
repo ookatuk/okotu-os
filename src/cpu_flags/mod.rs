@@ -53,6 +53,9 @@ define_cpu_flags! {
             TscHardWareAdjust,
             InvariantTsc,
             Aux
+        },
+        apic {
+            X2Supported
         }
     },
 }
@@ -96,7 +99,13 @@ pub fn raw_detect_flag_impl(kind: InternalFlagKind) -> bool {
         InternalFlagKind::environment_tsc_TscHardWareAdjust => is_environment_tsc_hardwareadjust(),
         InternalFlagKind::environment_tsc_InvariantTsc => is_environment_tsc_invariant_tsc(),
         InternalFlagKind::environment_tsc_Aux => is_environment_tsc_aux(),
+        InternalFlagKind::environment_apic_X2Supported => is_environment_apic_x2_supported(),
     }
+}
+
+fn is_environment_apic_x2_supported() -> bool {
+    let info = unsafe { crate::cpu::cpu_id::read(0x01, None) };
+    (info.ecx & (1 << 21)) != 0
 }
 
 fn is_environment_tsc_aux() -> bool {

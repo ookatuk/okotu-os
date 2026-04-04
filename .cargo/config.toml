@@ -6,12 +6,10 @@ target-dir = "/dev/shm/rust_target/my_os_v2"
 [target.x86_64-unknown-uefi]
 rustflags = [
     "-Z", "cf-protection=full",
-    "-C", "relocation-model=pic",
     "-C", "target-cpu=x86-64-v2",
     "-C", "no-redzone=y",
     "-C", "panic=abort",
     "-C", "code-model=small",
-    "-C", "link-arg=-z",
     "-C", "link-arg=/ALIGN:4096",
     "--cfg", "sha2_backend=\"soft\"",
 ]

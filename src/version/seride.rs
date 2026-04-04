@@ -57,7 +57,7 @@ impl<'de> Deserialize<'de> for HashVariant<'de> {
                 let hex_str = hash_hex.ok_or_else(|| de::Error::missing_field("hash"))?;
 
                 let hash_bytes = base64::prelude::BASE64_URL_SAFE.decode(&hex_str).map_err(|_| {
-                    de::Error::invalid_value(de::Unexpected::Str(&hex_str), &"valid hex string")
+                    de::Error::invalid_value(de::Unexpected::Str(&hex_str), &"valid base64 string")
                 })?;
 
                 HashVariant::from_parts(&algo_str, Cow::Owned(hash_bytes))

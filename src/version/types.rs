@@ -2,7 +2,6 @@ use alloc::borrow::{Cow};
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use base64::Engine;
 use serde::{Deserialize, Serialize};

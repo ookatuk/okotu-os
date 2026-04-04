@@ -1,7 +1,7 @@
 use std::env;
 use std::fs::File;
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
 use sha3::{Digest, Sha3_512};
@@ -44,6 +44,23 @@ fn calculate_dir_hash(dir_path: &str) -> io::Result<String> {
 fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=src");
+
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let dest_path = Path::new(&out_dir).join("trampoline.bin");
+    let asm_path = "src/arch/x86_64/trampoline.asm";
+
+    let status = Command::new("nasm")
+        .arg("-f")
+        .arg("bin")
+        .arg("-o")
+        .arg(&dest_path)
+        .arg(asm_path)
+        .status()
+        .expect("Failed to execute NASM. Is it installed?");
+
+    if !status.success() {
+        panic!("NASM compilation failed with status: {}", status);
+    }
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let src_dir = PathBuf::from(&manifest_dir).join("src");

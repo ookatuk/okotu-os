@@ -65,20 +65,20 @@ yaml-peg = { version = "^1.0", default-features = false, features = ["serde"] }
 paste = { version = "^1.0" }
 talc = { version = "^5.0", default-features = false, features = ["counters"] }
 lazy_static = { version = "^1.0", default-features = false, features = ["spin_no_std"] }
-
 spinning_top = { version = "0.3.0", default-features = false }
 
 [build-dependencies]
 sha3 = "0.10"
 walkdir = "^2.5"
 hex = { version = "^0.4" }
+nasm-rs = "^0.3"
 
 [profile.dev]
 opt-level = 1
 overflow-checks = true
 debug = 2
 debug-assertions = true
-lto = "thin"
+lto = false
 panic="abort"
 
 [profile.dev.package."*"]
@@ -88,7 +88,7 @@ debug = false
 [profile.release]
 lto = "fat"
 codegen-units = 1
-opt-level = "z"
+opt-level = "s"
 strip = "symbols"
 debug-assertions = false
 debug = "line-tables-only"
