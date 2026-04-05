@@ -28,7 +28,7 @@ const OS_NAME: &str = "okots";
 const DEBUG_PROTOCOL_VERSION: &str = "2.0";
 #[allow(unused)]
 const PANICED_TO_RESTART_TIME: usize = 20;
-const STACK_SIZE: usize = 1024 * 64;
+const STACK_SIZE: usize = 1024 * 32;
 const ALLOCATOR_FIRST_CREATE_SIZE_OPTION_MAX_ALLOCATE_SIZE: usize = 1024 * 1024 * 1024 * 2;
 const ALLOCATOR_FIRST_CREATE_SIZE_OPTION_MIN_ALLOCATE_SIZE: usize = 4096 * 2;
 
@@ -99,6 +99,7 @@ pub mod drivers;
 pub mod interrupt;
 pub mod multi_core;
 pub mod apic_helper;
+pub mod r#async;
 
 #[cfg_attr(not(test), global_allocator)]
 /// 物理/仮想アロケーター.
@@ -170,6 +171,8 @@ impl Main {
         interrupt::api::init();
 
         apic_helper::init_local_apic();
+
+        r#async::spawn_on();
 
         // drivers::disk::virt_io::a();
 
@@ -247,8 +250,6 @@ impl Main {
             self.initialized_core_count.store(0, Ordering::SeqCst);
         }
 
-        deb!("a {}", len);
-
         {  // タイマー設定
             self.global_data.value.store(0, Ordering::SeqCst);
 
@@ -268,7 +269,6 @@ impl Main {
                 spin_loop();
             }
 
-            // 4. 全員が通過したことを確認してからリセット
             self.initialized_core_count.store(0, Ordering::SeqCst);
         }
     }
@@ -760,7 +760,7 @@ pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *mut c_void) -> !
                                     //     let mut gs : *mut u16 = get_gs_register!().addr()
                                     // ```
         "xor eax, eax",             // eax: *mut u64  = 0
-        "sub rsp, 56",              // rsp: *mut u8    -= 56  // reserve 56-byte stack frame above current rsp
+        "sub rsp, 56",              // rsp: *mut u8    -= (32 + 24)  // reserve 56-byte stack frame above current rsp
 
         "mov r12, rdx",             // r12: *mut u64  = rdx
         "call {set_handle}",        // set_handle(rcx: `func.args._handle`) // rcx to Clobbered

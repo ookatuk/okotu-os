@@ -1,5 +1,4 @@
 use core::hint::spin_loop;
-use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
 use spin::{Lazy, RwLock};
 use x86::time::rdtsc;

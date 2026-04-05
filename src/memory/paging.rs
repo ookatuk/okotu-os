@@ -308,7 +308,6 @@ fn create_recursive(
             let raw_entry = match level {
                 PageLevel::Pdpt => {
                     let f_orig = sub_flags[0].to_pdptf();
-                    // PATビット(bit 7)をHugePage用のbit 12に移動させる処理
                     let mut f_bits = f_orig.bits();
                     if (f_bits & (1 << 7)) != 0 {
                         f_bits = (f_bits & !(1 << 7)) | (1 << 12);
@@ -350,7 +349,6 @@ fn create_recursive(
                 };
             let phys_addr = next_table as u64 - PHY_OFFSET as u64;
 
-            // 中間テーブルには RELAY_FLAGS を使用
             let raw_entry = match level {
                 PageLevel::Pml5 => {
                     PML5Entry::new(

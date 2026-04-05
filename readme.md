@@ -50,8 +50,8 @@ We plan to specify the app version in YAML instead of XML!
 
 > [!NOTE]
 > *Build System Internals*
-> Most cargo make tasks are simple wrappers around the scripts in `scripts/`.
-> You can achieve the same results by manually executing the corresponding script file (just avoid those starting with `internal_`).
+> Most cargo make tasks simply wrap scripts located in `scripts/` or add options to a single command.\
+> You can achieve the same result by directly executing the corresponding script file (but avoid files starting with `internal_`).
 
 1. Install `cargo-make`
 > Run:
@@ -100,7 +100,7 @@ We plan to specify the app version in YAML instead of XML!
 * If you need EFI:
 > Run:
 > ```bash
-> cargo build
+> cargo make build
 > ```
 
 ## What is the `log_viewer`?
@@ -113,9 +113,14 @@ We plan to specify the app version in YAML instead of XML!
 >
 > To run it (requires native Linux or WSL with GUI support):
 > ```bash
-> cargo run
+> cargo make run
 > ```
 > I just don't want to regret because my code is so bad
+
+> [!TIP] 
+> ### How to run test?
+> This OS can use `cargo make test`.\
+> However, because it runs as an application and not as an operating system, some parts cannot be tested.
 
 ### ---
 Are there too many dependencies?

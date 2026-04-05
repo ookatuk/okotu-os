@@ -50,4 +50,4 @@ script = [
 [tasks.run]
 script_runner = "${TARGET_SHELL}"
 command = "cargo"
-args = ["run", "${@}"]
+args = ["run", "--features", "features_enable_debug_mode", "--target", "x86_64-unknown-uefi", "${@}"]
