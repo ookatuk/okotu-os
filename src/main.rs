@@ -67,6 +67,7 @@ use x86_64::instructions::interrupts;
 use x86_64::instructions::interrupts::int3;
 use x86_64::structures::paging::PageTable;
 use crate::apic_helper::{broadcast_init_ipi_exc_self, broadcast_ipi_exc_self, send_init_ipi, send_sipi, ICR_STARTUP};
+use crate::r#async::yield_now;
 use crate::util::debug::with_interr;
 use crate::cpu::cpu_id;
 use crate::cpu::utils::{get_vendor_name_raw, vendor_list};
@@ -172,15 +173,30 @@ impl Main {
 
         apic_helper::init_local_apic();
 
-        r#async::spawn_on();
-
         // drivers::disk::virt_io::a();
 
         self.init_ap();
 
-        log_last!("kernel", "info", "reached last.");
+        TSC.spin(Duration::from_micros(10));
+
+        let exec = r#async::Executor::new().unwrap();
+
+        exec.spawn(Self::async_main_inner());
+
+        exec.run();
+    }
+
+    async fn async_main_inner() -> ! {
+        let me = MAIN_COPY.get().unwrap();
+        me.async_main().await;
+    }
+
+    async fn async_main(&'static self) -> ! {
+        drivers::disk::virt_io::a();
+
+        log_last!("kernel", "kernel", "leached last.");
         loop {
-            spin_loop();
+            yield_now().await
         }
     }
 
@@ -326,12 +342,11 @@ impl Main {
             self.initialized_core_count.fetch_add(1, Ordering::SeqCst);
         }
 
-
         gs.tsc_init = true;
 
-        loop {
-            spin_loop();
-        }
+        let exec = r#async::Executor::new().unwrap();
+
+        exec.run();
     }
 
     fn get_core_info(&'static self) -> result::Result {

@@ -4,6 +4,7 @@ use core::hint::{spin_loop};
 use core::ops::{Deref, DerefMut};
 use x86_64::structures::idt::InterruptDescriptorTable;
 use crate::ALLOC;
+use crate::r#async::{CoreExecutor, Executor};
 use crate::cpu::msr;
 use crate::interrupt::raw::IdtRawStacks;
 use crate::memory::paging::TopPageTable;
@@ -24,7 +25,8 @@ pub struct ThreadLocalStorageInner<'a> {
     pub tsc_data: TscGsData,
     pub tsc_init: bool,
     pub idt_raw: InterruptDescriptorTable,
-    pub idt_stack: IdtRawStacks<'a>
+    pub idt_stack: IdtRawStacks<'a>,
+    pub executor: CoreExecutor
 }
 
 

@@ -237,3 +237,16 @@ pub unsafe fn broadcast_ipi_exc_self(mode_flags: u64, vector: u8) {
         }
     }
 }
+
+pub unsafe fn broadcast_fixed_ipi(vector: u8) {
+    const ICR_ALL_EXCLUDING_SELF: u64 = 0x3 << 18; // Shorthand
+    let cmd = ICR_FIXED | ICR_ASSERT | ICR_ALL_EXCLUDING_SELF | (vector as u64);
+
+    if is_x2apic_active() {
+        msr::write(X2APIC_MSR_ICR, cmd); // x2APICなら宛先指定不要
+    } else {
+        // xAPICなら上位を0にしてから下位を書く
+        write_apic(APIC_REG_ICR_HIGH, 0);
+        write_apic(APIC_REG_ICR_LOW, cmd as u32);
+    }
+}
