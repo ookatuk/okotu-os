@@ -28,7 +28,7 @@ const OS_NAME: &str = "okots";
 const DEBUG_PROTOCOL_VERSION: &str = "2.0";
 #[allow(unused)]
 const PANICED_TO_RESTART_TIME: usize = 20;
-const STACK_SIZE: usize = 1024 * 64;
+const STACK_SIZE: usize = 1024 * 32;
 const ALLOCATOR_FIRST_CREATE_SIZE_OPTION_MAX_ALLOCATE_SIZE: usize = 1024 * 1024 * 1024 * 2;
 const ALLOCATOR_FIRST_CREATE_SIZE_OPTION_MIN_ALLOCATE_SIZE: usize = 4096 * 2;
 
@@ -67,6 +67,7 @@ use x86_64::instructions::interrupts;
 use x86_64::instructions::interrupts::int3;
 use x86_64::structures::paging::PageTable;
 use crate::apic_helper::{broadcast_init_ipi_exc_self, broadcast_ipi_exc_self, send_init_ipi, send_sipi, ICR_STARTUP};
+use crate::r#async::yield_now;
 use crate::util::debug::with_interr;
 use crate::cpu::cpu_id;
 use crate::cpu::utils::{get_vendor_name_raw, vendor_list};
@@ -99,6 +100,7 @@ pub mod drivers;
 pub mod interrupt;
 pub mod multi_core;
 pub mod apic_helper;
+pub mod r#async;
 
 #[cfg_attr(not(test), global_allocator)]
 /// 物理/仮想アロケーター.
@@ -175,9 +177,26 @@ impl Main {
 
         self.init_ap();
 
-        log_last!("kernel", "info", "reached last.");
+        TSC.spin(Duration::from_micros(10));
+
+        let exec = r#async::Executor::new().unwrap();
+
+        exec.spawn(Self::async_main_inner());
+
+        exec.run();
+    }
+
+    async fn async_main_inner() -> ! {
+        let me = MAIN_COPY.get().unwrap();
+        me.async_main().await;
+    }
+
+    async fn async_main(&'static self) -> ! {
+        drivers::disk::virt_io::a();
+
+        log_last!("kernel", "kernel", "leached last.");
         loop {
-            spin_loop();
+            yield_now().await
         }
     }
 
@@ -247,8 +266,6 @@ impl Main {
             self.initialized_core_count.store(0, Ordering::SeqCst);
         }
 
-        deb!("a {}", len);
-
         {  // タイマー設定
             self.global_data.value.store(0, Ordering::SeqCst);
 
@@ -268,7 +285,6 @@ impl Main {
                 spin_loop();
             }
 
-            // 4. 全員が通過したことを確認してからリセット
             self.initialized_core_count.store(0, Ordering::SeqCst);
         }
     }
@@ -326,12 +342,11 @@ impl Main {
             self.initialized_core_count.fetch_add(1, Ordering::SeqCst);
         }
 
-
         gs.tsc_init = true;
 
-        loop {
-            spin_loop();
-        }
+        let exec = r#async::Executor::new().unwrap();
+
+        exec.run();
     }
 
     fn get_core_info(&'static self) -> result::Result {
@@ -760,7 +775,7 @@ pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *mut c_void) -> !
                                     //     let mut gs : *mut u16 = get_gs_register!().addr()
                                     // ```
         "xor eax, eax",             // eax: *mut u64  = 0
-        "sub rsp, 56",              // rsp: *mut u8    -= 56  // reserve 56-byte stack frame above current rsp
+        "sub rsp, 56",              // rsp: *mut u8    -= (32 + 24)  // reserve 56-byte stack frame above current rsp
 
         "mov r12, rdx",             // r12: *mut u64  = rdx
         "call {set_handle}",        // set_handle(rcx: `func.args._handle`) // rcx to Clobbered

@@ -4,9 +4,6 @@ section .trampoline vstart=0x7500
 
 global args
 args:
-
-global args
-args:
     .safety    dq 0x54855fafb595ad
     .pml_addr  dq 0x56
     .stack     dq 0x72
