@@ -35,6 +35,7 @@ We plan to specify the app version in YAML instead of XML!
 ### Debug
 * qemu-system-x86_64
 * ovmf
+* gdb-multiarch
 
 ## How to Init?
 
