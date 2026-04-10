@@ -6,6 +6,9 @@ use x86_64::{PrivilegeLevel};
 use x86_64::structures::idt::{InterruptStackFrame, PageFaultErrorCode};
 use spin::Once;
 use x86::current::segmentation::swapgs;
+use x86::tlb::flush_all;
+use x86_64::instructions::hlt;
+use x86_64::instructions::interrupts::disable;
 use x86_64::registers::segmentation::SegmentSelector;
 use crate::{log_error, log_last, ALLOC};
 use crate::thread_local::read_gs;
@@ -188,7 +191,29 @@ extern "x86-interrupt" fn nmi_handler(
     if stack_frame.code_segment.rpl() != PrivilegeLevel::Ring0 {
         unsafe{swapgs()};
     }
+}
 
+extern "x86-interrupt" fn panic_handler(
+    stack_frame: InterruptStackFrame,
+) {
+    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring0 {
+        unsafe{swapgs()};
+    }
+
+    disable();
+    loop {
+        hlt();
+    }
+}
+
+extern "x86-interrupt" fn update_paging_handle(
+    stack_frame: InterruptStackFrame,
+) {
+    if stack_frame.code_segment.rpl() != PrivilegeLevel::Ring0 {
+        unsafe{swapgs()};
+    }
+
+    unsafe{flush_all()};
 }
 
 pub fn init() {
@@ -198,31 +223,39 @@ pub fn init() {
         target.general_protection_fault.set_handler_fn(gp_handler).set_code_selector(SegmentSelector::new(
             1,
             PrivilegeLevel::Ring0
-        ));
+        )).set_stack_index(0);
         target.page_fault.set_handler_fn(page_fault_handler).set_code_selector(SegmentSelector::new(
             1,
             PrivilegeLevel::Ring0
-        ));
+        )).set_stack_index(0);
         target.double_fault.set_handler_fn(double_fault_handler).set_stack_index(DOUBLE_FAULT_STACK_ADDR).set_code_selector(SegmentSelector::new(
-            0,
+            1,
             PrivilegeLevel::Ring0
-        ));
+        )).set_stack_index(1);
         target.divide_error.set_handler_fn(divide_error_handler).set_code_selector(SegmentSelector::new(
             1,
             PrivilegeLevel::Ring0
-        ));
+        )).set_stack_index(0);
         target.invalid_opcode.set_handler_fn(invalid_opcode_handler).set_code_selector(SegmentSelector::new(
             1,
             PrivilegeLevel::Ring0
-        ));
-        target.breakpoint.set_handler_fn(breakpoint_handler).set_code_selector(SegmentSelector::new(
+        )).set_stack_index(0);
+        target.breakpoint.set_handler_fn(breakpoint_handler).set_privilege_level(PrivilegeLevel::Ring3).set_code_selector(SegmentSelector::new(
             1,
             PrivilegeLevel::Ring0
-        ));
+        )).set_stack_index(0);
         target.non_maskable_interrupt.set_handler_fn(nmi_handler).set_stack_index(NMI_STACK_ADDR).set_code_selector(SegmentSelector::new(
-            0,
+            1,
             PrivilegeLevel::Ring0
-        ));
+        )).set_stack_index(1);
+        target[32].set_handler_fn(panic_handler).set_code_selector(SegmentSelector::new(
+            1,
+            PrivilegeLevel::Ring0
+        )).set_stack_index(0);
+        target[33].set_handler_fn(update_paging_handle).set_code_selector(SegmentSelector::new(
+            1,
+            PrivilegeLevel::Ring0
+        )).set_stack_index(0);
     };
 
     target.load();

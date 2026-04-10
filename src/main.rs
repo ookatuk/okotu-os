@@ -64,7 +64,7 @@ use uefi::mem::memory_map::MemoryMap;
 use uefi::table::set_system_table;
 use uefi_raw::table::boot::{MemoryType, PAGE_SIZE};
 use x86_64::instructions::{hlt, interrupts};
-use x86_64::instructions::interrupts::{enable, int3};
+use x86_64::instructions::interrupts::{disable, enable, int3};
 use x86_64::structures::paging::PageTable;
 use crate::apic_helper::{broadcast_init_ipi_exc_self, broadcast_ipi_exc_self, send_init_ipi, send_sipi, ICR_STARTUP};
 use crate::asy_nc::{pending, yield_now};
@@ -871,6 +871,8 @@ pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *mut c_void) -> !
 #[panic_handler]
 #[cfg(not(test))]
 fn panic(info: &PanicInfo) -> ! {
+    disable();
+
     let message = info.to_string();
     let loc = info.location().unwrap().to_string();
 
@@ -897,8 +899,10 @@ fn panic(info: &PanicInfo) -> ! {
         info.location().unwrap()
     );
 
+    unsafe{apic_helper::broadcast_fixed_ipi(32)}
+
     loop {
-        spin_loop()
+        hlt();
     }
 }
 
