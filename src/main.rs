@@ -121,6 +121,13 @@ pub struct ImagePtr {
 }
 
 #[derive(Default, Debug)]
+pub struct PhysMemInfo {
+    pub phys_mem: AtomicUsize,
+    pub phys_map_uefi: Once<MyMemoryMapOwned>,
+    pub pys_map_this_kernel: RwLock<Vec<(usize, bool)>>
+}
+
+#[derive(Default, Debug)]
 pub struct GlobalData<'a> {
     pm_data: Once<&'a TopPageTable>,
     timer: AtomicBool,
@@ -131,9 +138,9 @@ pub struct GlobalData<'a> {
 struct Main {
     stack_data: RwLock<StackData>,
     core_info: RwLock<Vec<u32>>,
-    uefi_map: Once<MyMemoryMapOwned>,
     initialized_core_count: AtomicUsize,
     global_data: GlobalData<'static>,
+    phys_mem_info: PhysMemInfo,
 }
 static MAIN_COPY: Once<&'static Main> = Once::new();
 static ASYNC_COPY: Once<&'static AsyncMain> = Once::new();
@@ -263,7 +270,7 @@ impl Main {
                 multi_core::init::raw::init_trampoline::<false>(
                     Self::ap_entry_point as *const () as u64,
                     stacks.as_mut_slice(),
-                    self.uefi_map.get().unwrap(),
+                    self.phys_mem_info.phys_map_uefi.get().unwrap(),
                     table
                 ).unwrap();
             }
@@ -492,7 +499,7 @@ impl Main {
 
     fn exit_uefi(&'static self) -> result::Result {
         let map = unsafe{uefi_helper::boot::exit_boot_services_with_talc()};
-        let map = self.uefi_map.call_once(|| {map});
+        let map = self.phys_mem_info.phys_map_uefi.call_once(|| {map});
 
         log_info!("kernel", "memory", "creating custom uefi memory map...");
 

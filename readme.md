@@ -1,4 +1,4 @@
-﻿# okots (ookatu owned test os)
+﻿# okots (Okots Kernel Open Test System)
 > An OS with many dependencies, seemingly meticulously designed but bit really.
 
 > [!IMPORTANT]
