@@ -1,4 +1,4 @@
-# okotu (ookatu owned test os)
+# okots (ookatu owned test os)
 > An OS with many dependencies, seemingly meticulously designed but bit really.
 
 > [!IMPORTANT]

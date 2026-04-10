@@ -22,7 +22,7 @@ const VERSION_RAW: &str = "1.0.0";
 
 const MICRO_VER: u32 = 0;
 
-const OS_NAME: &str = "okotu";
+const OS_NAME: &str = "okots";
 
 /// OSプロトコルバージョン.
 const DEBUG_PROTOCOL_VERSION: &str = "2.0";
