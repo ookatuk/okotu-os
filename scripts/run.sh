@@ -21,10 +21,12 @@ MEM=5120
 VARS_TMP=$(mktemp /tmp/ovmf_vars.XXXXXX.fd)
 cp "$VARS_SRC" "$VARS_TMP"
 
-trap 'rm -f "/dev/shm/serial_pipe.in" "/dev/shm/serial_pipe.out"' EXIT
+PIPE_TMP=$(mktemp /tmp/pipe_tmp_XXXXXX -d)
 
-mkfifo "/dev/shm/serial_pipe.in" "/dev/shm/serial_pipe.out"
-"$WORKSPACE_ROOT/bin/log_viewer" < "/dev/shm/serial_pipe.out" &
+trap "rm -rf $PIPE_TMP" EXIT
+
+mkfifo "$PIPE_TMP/serial_pipe.in" "$PIPE_TMP/serial_pipe.out"
+"$WORKSPACE_ROOT/bin/log_viewer" < "$PIPE_TMP/serial_pipe.out" &
 VIEWER_PID=$!
 
 mkdir -p "$WORKSPACE_ROOT/esp/EFI/BOOT"
@@ -44,7 +46,7 @@ qemu-system-x86_64 \
   -drive if=pflash,format=raw,readonly=on,file="$CODE" \
   -drive if=pflash,format=raw,file="$VARS_TMP" \
   \
-  -serial pipe:"/dev/shm/serial_pipe" \
+  -serial pipe:"$PIPE_TMP/serial_pipe" \
   -device virtio-gpu-pci \
   -display gtk,zoom-to-fit=on \
   -rtc base=localtime,clock=host \
