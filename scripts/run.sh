@@ -55,10 +55,17 @@ qemu-system-x86_64 \
   -drive file=fat:rw:"$WORKSPACE_ROOT/esp",format=raw,if=none,id=virtio_disk \
   -device virtio-blk-pci,drive=virtio_disk \
   \
+  -s \
+  \
   -no-reboot \
-  -no-shutdown
+  -no-shutdown &
 
-# 終了処理
+QEMU_PID=$!
+sleep 1
+
+gdb-multiarch -ex "target remote :1234"
+
+wait $QEMU_PID
 wait $VIEWER_PID
 rm -f "$VARS_TMP"
 rm -f "$WORKSPACE_ROOT/serial_pipe.in" "$WORKSPACE_ROOT/serial_pipe.out"

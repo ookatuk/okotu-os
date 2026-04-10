@@ -7,7 +7,7 @@
 
 use x86_64::structures::idt::InterruptStackFrame;
 use crate::cpu::msr;
-use crate::{cpu_info, log_error};
+use crate::{cpu_info, deb, log_error};
 
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
 const X2APIC_MSR_BASE: u32 = 0x800;
@@ -50,6 +50,7 @@ fn is_x2apic_active() -> bool {
 /// 3. In x2apic mode, the upper 32 bits of the input offset are ignored.
 /// # Side Effects
 /// 1. Writing certain values may have an immediate impact.
+#[inline(always)]
 unsafe fn write_apic(reg_offset: u32, value: u32) {
     unsafe {
         if is_x2apic_active() {
@@ -67,6 +68,7 @@ unsafe fn write_apic(reg_offset: u32, value: u32) {
 /// read to apic
 /// # Safety
 /// 1. This func does not check for any ongoing data writes or other issues during the reading process.
+#[inline(always)]
 unsafe fn read_apic(reg_offset: u32) -> u32 {
     if is_x2apic_active() {
         if reg_offset == APIC_REG_ICR_HIGH {
@@ -109,7 +111,7 @@ fn log_apic_error(esr: u32) {
 /// # Safety
 /// 1. Do not use `eoi` for certain interrupts.
 /// 2. Do not run this outside of an interrupt.
-#[inline]
+#[inline(always)]
 pub unsafe fn send_eoi() {
     unsafe{write_apic(APIC_REG_EOI, 0)};
 }
@@ -239,14 +241,7 @@ pub unsafe fn broadcast_ipi_exc_self(mode_flags: u64, vector: u8) {
 }
 
 pub unsafe fn broadcast_fixed_ipi(vector: u8) {
-    const ICR_ALL_EXCLUDING_SELF: u64 = 0x3 << 18; // Shorthand
-    let cmd = ICR_FIXED | ICR_ASSERT | ICR_ALL_EXCLUDING_SELF | (vector as u64);
-
-    if is_x2apic_active() {
-        msr::write(X2APIC_MSR_ICR, cmd); // x2APICなら宛先指定不要
-    } else {
-        // xAPICなら上位を0にしてから下位を書く
-        write_apic(APIC_REG_ICR_HIGH, 0);
-        write_apic(APIC_REG_ICR_LOW, cmd as u32);
+    unsafe {
+        broadcast_ipi_exc_self(ICR_FIXED | ICR_ASSERT, vector);
     }
 }

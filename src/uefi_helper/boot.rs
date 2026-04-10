@@ -25,6 +25,7 @@ impl Iterator for MemoryMapIter {
     }
 }
 
+#[derive(Debug)]
 pub struct MyMemoryMapOwned {
     ptr: *mut u8,
     #[allow(unused)]

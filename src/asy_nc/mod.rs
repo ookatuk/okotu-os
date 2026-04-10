@@ -6,9 +6,9 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::hint::spin_loop;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-use crate::result;
+use crate::{deb, log_last, result};
 use core::time::Duration;
 use spin::Mutex;
 use spin::rwlock::RwLock;
@@ -36,10 +36,8 @@ impl Future for YieldNow {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if self.yielded {
-            // 2回目のPollなので完了
             Poll::Ready(())
         } else {
-            // 1回目：自分をWakeしてPendingを返す
             self.yielded = true;
             cx.waker().wake_by_ref();
             Poll::Pending
@@ -61,7 +59,6 @@ impl<T> Future for Pending<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // 何もせず、ただPendingを返すだけ
         Poll::Pending
     }
 }
@@ -132,6 +129,9 @@ struct Task {
 #[derive(Clone)]
 pub struct Executor {
     inner: Arc<CoreExecutor>,
+    pub online: Arc<AtomicBool>,
+    pub noise: Arc<AtomicBool>,
+    pub lapic_id: u32,
 }
 
 impl Executor {
@@ -141,7 +141,7 @@ impl Executor {
 
     pub fn new() -> result::Result<Self> {
         if interrupt::api::add(
-            0x65,
+            65,
             Self::dummy_interrupt,
             false
         ).is_err() {
@@ -156,6 +156,9 @@ impl Executor {
                 task_queue: Arc::new(Mutex::new(VecDeque::new())),
                 tickets: Arc::new(Mutex::new(BTreeMap::new())),
             }),
+            online: Arc::new(AtomicBool::new(true)),
+            noise: Arc::new(AtomicBool::new(false)),
+            lapic_id: crate::cpu::utils::who_am_i().unwrap(),
         };
 
         with_interr(|| {
@@ -169,14 +172,86 @@ impl Executor {
         Arc::clone(&self.inner)
     }
 
-    pub fn spawn_global<F>(future: F)
+    pub fn spawn_global<F>(future: F) -> bool
     where F: Future<Output = ()> + Send + 'static
     {
-        let executors = ASYNC_LIST.0.read();
-        if executors.is_empty() { return; }
+        let (target_lapic_id, needs_ipi) = {
+            let executors = ASYNC_LIST.0.read();
+            if executors.is_empty() { return false; }
 
-        let idx = ASYNC_LIST.1.fetch_add(1, Ordering::SeqCst) % executors.len();
-        executors[idx].spawn(future);
+            let idx = ASYNC_LIST.1.fetch_add(1, Ordering::SeqCst) % executors.len();
+            let executor = &executors[idx];
+
+            executor.spawn(future);
+
+            let already_notified = executor.noise.swap(true, Ordering::SeqCst);
+            let is_offline = !executor.online.load(Ordering::Relaxed);
+
+            let needs_ipi = !already_notified || is_offline;
+
+            (executor.lapic_id, needs_ipi)
+        };
+
+        if needs_ipi {
+            unsafe { crate::apic_helper::send_fixed_ipi(target_lapic_id, 65) };
+        }
+
+        true
+    }
+
+    pub fn spawn_selected_async_index<F>(index: usize, future: F) -> bool
+    where F: Future<Output = ()> + Send + 'static
+    {
+        let (target_lapic_id, needs_ipi) = {
+            let executors = ASYNC_LIST.0.read();
+            if executors.len() <= index { return false; }
+
+            let executor = &executors[index];
+
+            executor.spawn(future);
+
+            let already_notified = executor.noise.swap(true, Ordering::SeqCst);
+            let is_offline = !executor.online.load(Ordering::Relaxed);
+
+            let needs_ipi = !already_notified || is_offline;
+
+            (executor.lapic_id, needs_ipi)
+        };
+
+        if needs_ipi {
+            unsafe { crate::apic_helper::send_fixed_ipi(target_lapic_id, 65) };
+        }
+
+        true
+    }
+
+    pub fn spawn_selected_lapic_id<F>(id: u32, future: F) -> bool
+    where F: Future<Output = ()> + Send + 'static
+    {
+        let (target_lapic_id, needs_ipi) = {
+            let executors = ASYNC_LIST.0.read();
+            let executor = executors.iter().find(|x| {
+                x.lapic_id == id
+            });
+            if executor.is_none() { return false; }
+            let executor = executor.unwrap();
+
+
+            executor.spawn(future);
+
+            let already_notified = executor.noise.swap(true, Ordering::SeqCst);
+            let is_offline = !executor.online.load(Ordering::Relaxed);
+
+            let needs_ipi = !already_notified || is_offline;
+
+            (executor.lapic_id, needs_ipi)
+        };
+
+        if needs_ipi {
+            unsafe { crate::apic_helper::send_fixed_ipi(target_lapic_id, 65) };
+        }
+
+        true
     }
 
     pub fn spawn<T, F>(&self, future: F) -> JoinHandle<T>
@@ -204,8 +279,6 @@ impl Executor {
 
         self.inner.task_queue.lock().push_back(task);
 
-        unsafe{crate::apic_helper::broadcast_fixed_ipi(0x65)}
-
         JoinHandle { inner }
     }
 
@@ -227,23 +300,28 @@ impl Executor {
         loop {
             self.check_timers();
 
-            let task = self.inner.task_queue.lock().pop_front();
-            if let Some(task) = task {
+            if let Some(task) = self.inner.task_queue.lock().pop_front() {
+                if self.noise.load(Ordering::Relaxed) {
+                    self.noise.store(false, Ordering::SeqCst);
+                }
+
                 let waker = unsafe { self.create_waker(Arc::clone(&task)) };
                 let mut context = Context::from_waker(&waker);
                 let mut future = task.future.lock();
                 let _ = future.as_mut().poll(&mut context);
             } else {
                 with_interr(|| {
-                    let should_hlt = {
-                        let tickets = self.inner.tickets.lock();
-                        let queue = self.inner.task_queue.lock();
-                        tickets.is_empty() && queue.is_empty()
-                    };
-                    if should_hlt {
+                    let tickets_empty = self.inner.tickets.lock().is_empty();
+                    let queue_empty = self.inner.task_queue.lock().is_empty();
+
+                    if tickets_empty && queue_empty {
+                        if self.noise.swap(false, Ordering::SeqCst) {
+                            return;
+                        }
+
+                        self.online.store(false, Ordering::SeqCst);
                         enable_and_hlt();
-                    } else {
-                        spin_loop();
+                        self.online.store(true, Ordering::SeqCst);
                     }
                 });
             }
@@ -269,18 +347,15 @@ impl Executor {
         unsafe fn wake(ptr: *const ()) {
             let data = unsafe { Arc::from_raw(ptr as *const WakerData) };
             data.queue.lock().push_back(Arc::clone(&data.task));
-
-            unsafe{crate::apic_helper::broadcast_fixed_ipi(0x65)}
         }
         unsafe fn wake_by_ref(ptr: *const ()) {
             let data = unsafe { Arc::from_raw(ptr as *const WakerData) };
             data.queue.lock().push_back(Arc::clone(&data.task));
             let _ = Arc::into_raw(data);
-            unsafe{crate::apic_helper::broadcast_fixed_ipi(0x65)}
         }
 
         unsafe fn drop(ptr: *const ()) { let _ = unsafe { Arc::from_raw(ptr as *const WakerData) }; }
         static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-        Waker::from_raw(RawWaker::new(data, &VTABLE))
+        unsafe{Waker::from_raw(RawWaker::new(data, &VTABLE))}
     }
 }

@@ -50,6 +50,7 @@ use core::panic::PanicInfo;
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use alloc::{vec};
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::arch::{asm, naked_asm};
@@ -63,11 +64,11 @@ use uefi::boot::{set_image_handle, AllocateType};
 use uefi::mem::memory_map::MemoryMap;
 use uefi::table::set_system_table;
 use uefi_raw::table::boot::{MemoryType, PAGE_SIZE};
-use x86_64::instructions::interrupts;
-use x86_64::instructions::interrupts::int3;
+use x86_64::instructions::{hlt, interrupts};
+use x86_64::instructions::interrupts::{enable, int3};
 use x86_64::structures::paging::PageTable;
 use crate::apic_helper::{broadcast_init_ipi_exc_self, broadcast_ipi_exc_self, send_init_ipi, send_sipi, ICR_STARTUP};
-use crate::r#async::yield_now;
+use crate::asy_nc::{pending, yield_now};
 use crate::util::debug::with_interr;
 use crate::cpu::cpu_id;
 use crate::cpu::utils::{get_vendor_name_raw, vendor_list};
@@ -100,7 +101,7 @@ pub mod drivers;
 pub mod interrupt;
 pub mod multi_core;
 pub mod apic_helper;
-pub mod r#async;
+pub mod asy_nc;
 
 #[cfg_attr(not(test), global_allocator)]
 /// 物理/仮想アロケーター.
@@ -119,15 +120,14 @@ pub struct ImagePtr {
     pub text_size: usize,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct GlobalData {
     pm_data: Once<(Vec<MemRangeData<usize>>, Vec<PageEntryFlags>)>,
     timer: AtomicBool,
     value: AtomicU64
 }
 
-#[derive(Default)]
-#[repr(align(16))]
+#[derive(Default, Debug)]
 struct Main {
     stack_data: RwLock<StackData>,
     core_info: RwLock<Vec<u32>>,
@@ -136,13 +136,34 @@ struct Main {
     global_data: GlobalData
 }
 static MAIN_COPY: Once<&'static Main> = Once::new();
+static ASYNC_COPY: Once<&'static AsyncMain> = Once::new();
+
+#[derive(Debug)]
+pub struct AsyncMain {
+    pub non_async_main: &'static &'static Main,
+}
+
+impl AsyncMain {
+    pub fn new() -> Option<Self> {
+        Some(AsyncMain {
+            non_async_main: MAIN_COPY.get()?
+        })
+    }
+
+    pub async fn main(&'static self) -> ! {
+        log_last!("kernel", "kernel", "leached last.");
+        loop {
+            pending().await
+        }
+    }
+}
 
 impl Main {
     pub unsafe extern "C" fn main(&'static self, stack_top: u64, stack_len: u64) -> ! {
         if MAIN_COPY.is_completed() {
             log_last!("kernel", "kernel", "duplicate os main.");
             loop {
-                spin_loop();
+                hlt();
             };
         }
 
@@ -173,31 +194,17 @@ impl Main {
 
         apic_helper::init_local_apic();
 
-        // drivers::disk::virt_io::a();
-
         self.init_ap();
 
         TSC.spin(Duration::from_micros(10));
 
-        let exec = r#async::Executor::new().unwrap();
+        let exec = asy_nc::Executor::new().unwrap();
 
-        exec.spawn(Self::async_main_inner());
+        let asy = Box::leak(Box::new(AsyncMain::new().unwrap()));
+
+        exec.spawn(AsyncMain::main(asy));
 
         exec.run();
-    }
-
-    async fn async_main_inner() -> ! {
-        let me = MAIN_COPY.get().unwrap();
-        me.async_main().await;
-    }
-
-    async fn async_main(&'static self) -> ! {
-        drivers::disk::virt_io::a();
-
-        log_last!("kernel", "kernel", "leached last.");
-        loop {
-            yield_now().await
-        }
     }
 
     fn init_ap(&'static self) {
@@ -327,6 +334,12 @@ impl Main {
             gs.tsc_data.par_100ns = total_tsc / 1_000_000;
         }
 
+        apic_helper::init_local_apic();
+        cpu::utils::init_gdt();
+        interrupt::api::init();
+
+        enable();
+
         {
             self.initialized_core_count.fetch_add(1, Ordering::SeqCst);
 
@@ -344,7 +357,7 @@ impl Main {
 
         gs.tsc_init = true;
 
-        let exec = r#async::Executor::new().unwrap();
+        let exec = asy_nc::Executor::new().unwrap();
 
         exec.run();
     }

@@ -204,7 +204,7 @@ pub fn init() {
             PrivilegeLevel::Ring0
         ));
         target.double_fault.set_handler_fn(double_fault_handler).set_stack_index(DOUBLE_FAULT_STACK_ADDR).set_code_selector(SegmentSelector::new(
-            1,
+            0,
             PrivilegeLevel::Ring0
         ));
         target.divide_error.set_handler_fn(divide_error_handler).set_code_selector(SegmentSelector::new(
@@ -220,7 +220,7 @@ pub fn init() {
             PrivilegeLevel::Ring0
         ));
         target.non_maskable_interrupt.set_handler_fn(nmi_handler).set_stack_index(NMI_STACK_ADDR).set_code_selector(SegmentSelector::new(
-            1,
+            0,
             PrivilegeLevel::Ring0
         ));
     };

@@ -4,7 +4,7 @@ use core::hint::{spin_loop};
 use core::ops::{Deref, DerefMut};
 use x86_64::structures::idt::InterruptDescriptorTable;
 use crate::ALLOC;
-use crate::r#async::{CoreExecutor, Executor};
+use crate::asy_nc::{CoreExecutor, Executor};
 use crate::cpu::msr;
 use crate::interrupt::raw::IdtRawStacks;
 use crate::memory::paging::TopPageTable;
