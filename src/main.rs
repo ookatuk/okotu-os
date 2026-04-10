@@ -66,7 +66,7 @@ use uefi_raw::table::boot::{MemoryType, PAGE_SIZE};
 use x86_64::instructions::{hlt, interrupts};
 use x86_64::instructions::interrupts::{enable};
 use crate::apic_helper::{broadcast_init_ipi_exc_self, broadcast_ipi_exc_self, ICR_STARTUP};
-use crate::asy_nc::{pending};
+use crate::asy_nc::{pending, yield_now};
 use crate::util::debug::with_interr;
 use crate::cpu::cpu_id;
 use crate::cpu::utils::{get_vendor_name_raw, vendor_list};
@@ -151,7 +151,7 @@ impl AsyncMain {
     }
 
     pub async fn main(&'static self) -> ! {
-        drivers::disk::virt_io::a();
+        drivers::disk::virt_io::a().await;
 
         log_last!("kernel", "kernel", "leached last.");
         loop {

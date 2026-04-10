@@ -295,19 +295,30 @@ impl Executor {
         }
     }
 
+
     pub fn run(&self) -> ! {
         loop {
             self.check_timers();
 
-            if let Some(task) = self.inner.task_queue.lock().pop_front() {
+            let task = self.inner.task_queue.lock().pop_front();
+
+            if let Some(task) = task {
                 if self.noise.load(Ordering::Relaxed) {
                     self.noise.store(false, Ordering::SeqCst);
                 }
 
                 let waker = unsafe { self.create_waker(Arc::clone(&task)) };
                 let mut context = Context::from_waker(&waker);
-                let mut future = task.future.lock();
-                let _ = future.as_mut().poll(&mut context);
+
+                {
+                    let mut future = task.future.lock();
+                    let _ = future.as_mut().poll(&mut context);
+                }
+
+                unsafe {
+                    core::hint::spin_loop();
+                }
+
             } else {
                 with_interr(|| {
                     let tickets_empty = self.inner.tickets.lock().is_empty();
@@ -343,18 +354,23 @@ impl Executor {
             let _ = Arc::into_raw(data);
             RawWaker::new(Arc::into_raw(cloned) as *const (), &VTABLE)
         }
+
         unsafe fn wake(ptr: *const ()) {
             let data = unsafe { Arc::from_raw(ptr as *const WakerData) };
             data.queue.lock().push_back(Arc::clone(&data.task));
         }
+
         unsafe fn wake_by_ref(ptr: *const ()) {
             let data = unsafe { Arc::from_raw(ptr as *const WakerData) };
             data.queue.lock().push_back(Arc::clone(&data.task));
             let _ = Arc::into_raw(data);
         }
 
-        unsafe fn drop(ptr: *const ()) { let _ = unsafe { Arc::from_raw(ptr as *const WakerData) }; }
+        unsafe fn drop(ptr: *const ()) {
+            let _ = unsafe { Arc::from_raw(ptr as *const WakerData) };
+        }
+
         static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-        unsafe{Waker::from_raw(RawWaker::new(data, &VTABLE))}
+        unsafe { Waker::from_raw(RawWaker::new(data, &VTABLE)) }
     }
 }
