@@ -184,10 +184,10 @@ impl Executor {
 
             executor.spawn(future);
 
-            let already_notified = executor.noise.swap(true, Ordering::SeqCst);
+            let already = executor.noise.swap(true, Ordering::SeqCst);
             let is_offline = !executor.online.load(Ordering::Relaxed);
 
-            let needs_ipi = !already_notified || is_offline;
+            let needs_ipi = !already || is_offline;
 
             (executor.lapic_id, needs_ipi)
         };

@@ -4,15 +4,11 @@ use crate::{cpu_info, result, Main, ALLOCATOR_ADD_OFFSET, MAIN_COPY};
 
 static TRAMPOLINE_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/trampoline.bin"));
 
-use core::ptr::{read_volatile, write_volatile};
-use core::time::Duration;
 use uefi_raw::table::boot::MemoryType;
 use x86_64::registers::control::{Cr3, Cr4};
 use x86_64::structures::paging::PageTable;
 use crate::memory::paging::PageEntryFlags;
 use crate::result::{Error, ErrorType};
-use crate::timer::Timer;
-use crate::timer::tsc::TSC;
 use crate::uefi_helper::boot::MyMemoryMapOwned;
 use crate::util_types::MemRangeData;
 
@@ -20,29 +16,8 @@ const fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
 
-const LAPIC_ICR_LOW: *mut u32 = 0xfee00300 as *mut u32;
-const LAPIC_ICR_HIGH: *mut u32 = 0xfee00310 as *mut u32;
 const TRAMP_TARGET: usize = 0x7500;
 
-pub unsafe fn send_sipi(vector: u8) {
-    TSC.spin(Duration::from_millis(10));
-
-    let sipi_command = (0b01 << 18) | (0b110 << 8) | (vector as u32);
-
-    for _ in 0..2 {
-        unsafe {
-            write_volatile(LAPIC_ICR_HIGH, 0);
-            write_volatile(LAPIC_ICR_LOW, sipi_command);
-        }
-        TSC.spin(Duration::from_micros(200));
-    }
-}
-
-pub unsafe fn send_inits() {
-    unsafe {
-        write_volatile(LAPIC_ICR_LOW, 0x000C4500);
-    }
-}
 
 pub unsafe fn init_trampoline<const OVER_WRITE: bool>(entry_point: u64, stack: &mut [*mut u8], uefi_map: &MyMemoryMapOwned, pt: &PageTable) -> result::Result {
     #[cfg(feature = "enable_normal_safety_checks")]

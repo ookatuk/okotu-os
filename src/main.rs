@@ -56,7 +56,6 @@ use core::alloc::Layout;
 use core::arch::{asm, naked_asm};
 use core::ffi::c_void;
 use core::hint::{spin_loop};
-use core::ptr::write_volatile;
 use core::sync::atomic::AtomicUsize;
 use core::time::Duration;
 use spin::{Once, RwLock};
@@ -309,7 +308,7 @@ impl Main {
             interrupts::enable();
 
             let (mut a, mut b) = self.global_data.pm_data.get().unwrap().clone();
-            self.util_update_paging::<false>(
+            self.create_paging(
                 &mut a,
                 &mut b,
             ).unwrap();
@@ -476,7 +475,7 @@ impl Main {
 
         let (mut t, mut r) = self.update_paging(&map)?;
 
-        self.util_update_paging::<false>(&mut t, &mut r)?;
+        self.create_paging(&mut t, &mut r)?;
 
         log_info!("kernel", "memory", "adding other free memory...");
 
@@ -578,17 +577,57 @@ impl Main {
             keep
         });
 
+        let mut old = read_gs().unwrap().page_table.clone();
+
+        let res = memory::paging::update_paging(
+            &mut old,
+            map_list,
+            flags,
+            if cpu_info!(environment::paging::PdptHuge) {PageLevel::Pdpt} else {PageLevel::Pd},
+        )?;
+
+
+
+        if FREE {
+            unsafe{memory::paging::free_not_used_paging(res)}
+        };
+
+        Ok(())
+    }
+
+    fn create_paging(
+        &'static self,
+        map_list: &mut Vec<MemRangeData<usize>>,
+        flags: &mut Vec<PageEntryFlags>,
+    ) -> result::Result {
+        let nx_mask = !PageEntryFlags::EXECUTE_DISABLE;
+
+        let mut i = 0;
+        flags.retain_mut(|f| {
+            if !cpu_info!(environment::paging::NX) {
+                *f &= nx_mask;
+            }
+
+            let keep = !f.is_empty();
+
+            if !keep {
+                map_list.remove(i);
+            } else {
+                i += 1;
+            }
+
+            keep
+        });
+
         let res = memory::paging::create_page_table(
             map_list,
             flags,
             if cpu_info!(environment::paging::PdptHuge) {PageLevel::Pdpt} else {PageLevel::Pd},
             if cpu_info!(current::paging::Pml5) {PageLevel::Pml5} else {PageLevel::Pml4},
         )?;
+
         memory::paging::set_current(&res);
-        if FREE {
-            let old = read_gs().unwrap().page_table.clone();
-            unsafe{memory::paging::dealloc_all(old)}
-        };
+
         read_gs().unwrap().page_table = res;
 
         Ok(())

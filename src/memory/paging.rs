@@ -152,6 +152,7 @@ pub struct TopPageTable {
     pub phys: PhysAddr,
     pub virt: VirtAddr,
     pub level: PageLevel,
+    pub page_fragmentation_level: usize,
     pub memory_mapping: (Vec<MemRangeData<usize>>, Vec<PageEntryFlags>),
 }
 
@@ -162,6 +163,7 @@ impl Default for TopPageTable {
             virt: VirtAddr::zero(),
             level: PageLevel::Pt,
             memory_mapping: (Vec::new(), Vec::new()),
+            page_fragmentation_level: 0
         }
     }
 }
@@ -226,6 +228,7 @@ pub fn create_page_table(
         virt: VirtAddr::new(phys.as_u64() + PHY_OFFSET as u64),
         level: target,
         memory_mapping: (map_list.to_vec(), flags.to_vec()),
+        page_fragmentation_level: 0
     })
 }
 
@@ -505,4 +508,138 @@ unsafe fn dealloc_recursive(target: &mut PageTable, level: PageLevel) {
             Layout::from_size_align_unchecked(4096, 4096)
         )
     }
+}
+
+pub type UpdatePagingResults<'a> = Vec<(&'a mut PageTable, PageLevel)>;
+
+pub fn update_paging(
+    top: &mut TopPageTable,
+    new_map_list: &mut Vec<MemRangeData<usize>>,
+    new_flags: &mut Vec<PageEntryFlags>,
+    allow_huge_at: PageLevel,
+) -> result::Result<UpdatePagingResults<'static>> {
+    normalize_map_list(new_map_list, new_flags);
+
+    let mut buf: UpdatePagingResults  = Vec::new();
+
+     update_recursive(
+        top.virt.as_u64() as usize,
+        0,
+        top.level,
+        new_map_list,
+        new_flags,
+        allow_huge_at,
+        &mut buf,
+    )?;
+
+    top.memory_mapping = (new_map_list.to_vec(), new_flags.to_vec());
+
+    Ok(buf)
+}
+
+pub unsafe fn free_not_used_paging(dealloc_target: UpdatePagingResults) {
+    for i in dealloc_target {
+        unsafe{dealloc_recursive(i.0, i.1)};
+    }
+}
+
+fn update_recursive(
+    table_ptr: usize,
+    vaddr_base: usize,
+    level: PageLevel,
+    map_list: &Vec<MemRangeData<usize>>,
+    flags: &Vec<PageEntryFlags>,
+    allow_huge: PageLevel,
+    tmp_vec: &mut UpdatePagingResults,
+) -> result::Result<()> {
+    fn generate_relay_entry(level: PageLevel, phys: u64) -> u64 {
+        match level {
+            PageLevel::Pml5 => PML5Entry::new(PAddr::from(phys), RELAY_FLAGS.to_pml5f() | PML5Flags::P).0,
+            PageLevel::Pml4 => PML4Entry::new(PAddr::from(phys), RELAY_FLAGS.to_pml4f() | PML4Flags::P).0,
+            PageLevel::Pdpt => PDPTEntry::new(PAddr::from(phys), RELAY_FLAGS.to_pdptf() | PDPTFlags::P).0,
+            PageLevel::Pd   => PDEntry::new(PAddr::from(phys), RELAY_FLAGS.to_pdf() | PDFlags::P).0,
+            _ => 0,
+        }
+    }
+
+
+    fn generate_huge_entry(level: PageLevel, vaddr: u64, flags: PageEntryFlags) -> u64 {
+        match level {
+            PageLevel::Pdpt => {
+                let f = flags.to_pdptf();
+                PDPTEntry::new(PAddr::from(vaddr), f | PDPTFlags::PS | PDPTFlags::P).0
+            }
+            PageLevel::Pd => {
+                let f = flags.to_pdf();
+                PDEntry::new(PAddr::from(vaddr), f | PDFlags::PS | PDFlags::P).0
+            }
+            _ => 0,
+        }
+    }
+
+    let table = unsafe { &mut *(table_ptr as *mut [u64; 512]) };
+    let shift = (level as u8) * 9 + 12;
+    let entry_size = 1usize << shift;
+
+    for idx in 0..512 {
+        let range_vstart = vaddr_base + (idx * entry_size);
+        let range_vend = range_vstart + entry_size;
+
+        let mut sub_map = Vec::new();
+        let mut sub_flags = Vec::new();
+        for (m, f) in map_list.iter().zip(flags.iter()) {
+            if m.start() < range_vend && m.end() > range_vstart {
+                sub_map.push(m.clone());
+                sub_flags.push(*f);
+            }
+        }
+
+        let old_entry = table[idx];
+        let old_present = (old_entry & 1) != 0;
+        let old_huge = (old_entry & (1 << 7)) != 0;
+
+        if sub_map.is_empty() {
+            if old_present {
+                if !old_huge && level != PageLevel::Pt {
+                    let next_ptr = (old_entry & 0x000F_FFFF_FFFF_F000) + PHY_OFFSET as u64;
+                    tmp_vec.push((unsafe{&mut *(next_ptr as *mut PageTable)}, level.down().unwrap()));
+                }
+                table[idx] = 0;
+            }
+            continue;
+        }
+
+        let can_be_huge = level != PageLevel::Pt
+            && level <= allow_huge
+            && sub_map.len() == 1
+            && sub_map[0].start() <= range_vstart
+            && sub_map[0].end() >= range_vend;
+
+        if can_be_huge {
+            let new_entry = generate_huge_entry(level, range_vstart as u64, sub_flags[0]);
+            if old_entry != new_entry {
+                if old_present && !old_huge {
+                    let next_ptr = (old_entry & 0x000F_FFFF_FFFF_F000) + PHY_OFFSET as u64;
+                    tmp_vec.push((unsafe{&mut *(next_ptr as *mut PageTable)}, level.down().unwrap()));
+                }
+                table[idx] = new_entry;
+            }
+            continue;
+        }
+
+        if let Some(next_level) = level.down() {
+            if old_present && !old_huge {
+                let next_ptr = (old_entry & 0x000F_FFFF_FFFF_F000) + PHY_OFFSET as u64;
+                update_recursive(next_ptr as usize, range_vstart, next_level, &sub_map, &sub_flags, allow_huge, tmp_vec)?;
+                table[idx] = generate_relay_entry(level, (next_ptr as u64) - PHY_OFFSET as u64);
+            } else {
+                let next_ptr = create_recursive(range_vstart, next_level, &sub_map, &sub_flags, allow_huge)?;
+                table[idx] = generate_relay_entry(level, (next_ptr as u64) - PHY_OFFSET as u64);
+            }
+        } else if level == PageLevel::Pt {
+            let new_entry = PTEntry::new(PAddr::from(range_vstart as u64), sub_flags[0].to_ptf() | PTFlags::P).0;
+            table[idx] = new_entry;
+        }
+    }
+    Ok(())
 }
