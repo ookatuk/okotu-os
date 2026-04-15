@@ -63,10 +63,10 @@ use uefi::boot::{set_image_handle, AllocateType};
 use uefi::mem::memory_map::MemoryMap;
 use uefi::table::set_system_table;
 use uefi_raw::table::boot::{MemoryType, PAGE_SIZE};
-use x86_64::instructions::{hlt, interrupts};
+use x86_64::instructions::{hlt};
 use x86_64::instructions::interrupts::{enable};
 use crate::apic_helper::{broadcast_init_ipi_exc_self, broadcast_ipi_exc_self, ICR_STARTUP};
-use crate::asy_nc::{pending, yield_now};
+use crate::asy_nc::{pending};
 use crate::util::debug::with_interr;
 use crate::cpu::cpu_id;
 use crate::cpu::utils::{get_vendor_name_raw, vendor_list};
@@ -81,8 +81,8 @@ use crate::util_types::MemRangeData;
 #[cfg(not(test))]
 use x86_64::instructions::interrupts::disable;
 
-mod io;
-mod manager;
+pub mod io;
+pub mod manager;
 pub mod logger;
 pub mod version;
 pub mod util;
@@ -851,7 +851,7 @@ pub extern "efiapi" fn efi_main(_handle: uefi::Handle, _table: *mut c_void) -> !
                                     // // It's not actually true, but it's roughly like this
                                     // ```
                                     //     let mut rcx: *mut u64 = func.args._handle
-                                    //     let mut rdx: *mutcargo u64 = func.args._table
+                                    //     let mut rdx: *mut u64 = func.args._table
 
                                     //     let mut rsp: *mut u8    = get_stack_pointer!().addr()
                                     //     let mut gs : *mut u16 = get_gs_register!().addr()

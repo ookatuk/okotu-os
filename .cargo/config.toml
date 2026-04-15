@@ -1,6 +1,6 @@
 [build]
 rustc-wrapper = "/usr/bin/sccache"
-target-dir = "/dev/shm/rust_target/my_os_v2"
+target-dir = "/dev/shm/rust_target/okots_os"
 
 [target.x86_64-unknown-uefi]
 rustflags = [

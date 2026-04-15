@@ -5,6 +5,7 @@ use core::ptr::NonNull;
 use core::time::Duration;
 use acpi::{Handle, PciAddress, PhysicalMapping};
 use acpi::aml::AmlError;
+use num_traits::Zero;
 use spin::{Lazy, Mutex};
 use x86_64::instructions::port::Port;
 use x86_64::VirtAddr;
@@ -40,6 +41,10 @@ impl TmpHandler {
 
 impl acpi::Handler for TmpHandler {
     unsafe fn map_physical_region<T>(&self, physical_address: usize, size: usize) -> PhysicalMapping<Self, T> {
+        if physical_address.is_zero() {
+            panic!("Physical address is zero");
+        }
+
         let mcp = MAIN_COPY.get().unwrap();
 
         let page_base = physical_address & !0xFFF;

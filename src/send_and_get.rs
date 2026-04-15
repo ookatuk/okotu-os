@@ -4,6 +4,7 @@ use core::hint::{unlikely};
 use core::marker::PhantomPinned;
 use core::pin::Pin;
 use core::ptr::null_mut;
+use crate::log_warn;
 
 const STRUCT_VER: u16 = 1;
 
@@ -153,6 +154,11 @@ impl<'a, T> Data<'a, T> {
 
 impl<'a, T> Drop for Data<'a, T> {
     fn drop(&mut self) {
+        if unlikely(self.tag.is_static() && !self.tag.borrow()) {
+            log_warn!("kernel", "kernel_ffi", "dropping but invalid tag found. skipping.");
+            return;
+        }
+
         if !self.tag.borrow() && !self.ptr.is_null() {
             unsafe {
                 let _ = Vec::from_raw_parts(self.ptr, self.len as usize, self.cap as usize);

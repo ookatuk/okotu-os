@@ -68,8 +68,8 @@ pub struct Error {
 }
 
 impl Error {
-    #[inline]
     #[track_caller]
+    #[must_use]
     pub const fn new(error_type: ErrorType, message: Option<&'static str>) -> Self {
         let message = match message {
             Some(s) => Some(Cow::Borrowed(s)),
@@ -87,6 +87,7 @@ impl Error {
 
     #[inline]
     #[track_caller]
+    #[must_use]
     pub fn new_string(error_type: ErrorType, message: Option<String>) -> Self {
         Self {
             error_type,
@@ -105,18 +106,21 @@ impl Error {
 
     #[inline]
     #[track_caller]
+    #[must_use]
     pub const fn from_uefi(status: uefi::Error, desc: Option<&'static str>) -> Self {
         Error::new(ErrorType::UefiError(status), desc)
     }
 
     #[inline]
     #[track_caller]
+    #[must_use]
     pub const fn from_acpi(status: acpi::AcpiError, desc: Option<&'static str>) -> Self {
         Error::new(ErrorType::AcpiError(status), desc)
     }
 
     #[inline]
     #[track_caller]
+    #[must_use]
     pub fn from_self(me: Self, desc: Option<&'static str>) -> Self {
         Error::new(ErrorType::ErrorRaised(Box::new(me)), desc)
     }
@@ -133,7 +137,7 @@ impl Error {
 
                 if let Some(acpi_err) = any_err.downcast_ref::<acpi::AcpiError>() {
                     Self::from_acpi(acpi_err.clone(), desc).raise()
-                } else if let Some(uefi_err) = any_err.downcast_ref::<uefi::Error>() {
+                } else if let Some(uefi_err) = any_err.downcast_ref::<uefi::Error>() { // FIXME uefi::Error<()>しか判定できないからそれの修正
                     Self::from_uefi(uefi_err.clone(), desc).raise()
                 } else if let Some(me) = any_err.downcast_ref::<Error>() {
                     Self::from_self(me.clone(), desc).raise()
@@ -157,14 +161,6 @@ impl Error {
     }
 }
 
-impl From<uefi::Error> for Error {
-    #[inline]
-    #[track_caller]
-    fn from(status: uefi::Error) -> Self {
-        Self::from_uefi(status, None)
-    }
-}
-
 impl Display for Error {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
@@ -185,6 +181,22 @@ impl From<Error> for Box<rhai::EvalAltResult> {
     }
 }
 
+impl From<uefi::Error> for Error {
+    #[inline]
+    #[track_caller]
+    fn from(status: uefi::Error) -> Self {
+        Self::from_uefi(status, None)
+    }
+}
+
+impl From<acpi::AcpiError> for Error {
+    #[inline]
+    #[track_caller]
+    fn from(status: acpi::AcpiError) -> Self {
+        Self::from_acpi(status, None)
+    }
+}
+
 unsafe impl Send for Error {}
 unsafe impl Sync for Error {}
 
@@ -198,12 +210,18 @@ mod tests {
 
     #[test]
     fn test_error_creation() {
-        let err = Error::new(ErrorType::InternalError, Some("static message"));
-        assert_eq!(format!("{}", err), "[InternalError] static message");
+        let err = Error::new(ErrorType::InternalError, Some("message"));
+        let err_owned = Error::new_string(ErrorType::DeviceError, Some(String::from("message")));
 
-        let err_owned = Error::new_string(ErrorType::DeviceError, Some(String::from("owned message")));
-        assert!(matches!(err_owned.error_type, ErrorType::DeviceError));
-        assert_eq!(err_owned.message.unwrap(), "owned message");
+        assert_eq!(format!("{}", err), "[InternalError] message", "static message (format)");
+        assert_eq!(format!("{}", err_owned), "[DeviceError] message", "err_owned message (format)");
+
+        assert!(matches!(err_owned.error_type, ErrorType::DeviceError), "error_owned type(not eq)");
+        assert!(matches!(err.error_type, ErrorType::InternalError), "error type(not eq)");
+
+
+        assert_eq!(err_owned.message.unwrap(), "message", "error_owned message");
+        assert_eq!(err.message.unwrap(), "message", "error message");
     }
 
     #[test]
@@ -216,17 +234,47 @@ mod tests {
     #[test]
     fn test_try_raise_downcast() {
         let inner_err = Error::new(ErrorType::IndexMax, None);
-        let result: Result<u32> = Error::try_raise(Err(inner_err), Some("raising again"));
+        let uefi_err = uefi::Error::new(uefi::Status::ABORTED, ());
+        let acpi_err = acpi::AcpiError::InvalidFacsAddress;
+
+        let result: Result<u8> = Error::try_raise(Err(inner_err), Some("ok"));
+        let result_uefi: Result<u8> = Error::try_raise(Err(uefi_err), Some("ok"));
+        let result_acpi: Result<u8> = Error::try_raise(Err(acpi_err), Some("ok"));
 
         match result {
             Err(e) => {
                 if let ErrorType::ErrorRaised(boxed_err) = e.error_type {
                     assert!(matches!(boxed_err.error_type, ErrorType::IndexMax));
                 } else {
-                    panic!("Should be ErrorRaised");
+                    panic!("Expected ErrorRaised, but got {:?}", e.error_type);
                 }
             }
-            _ => panic!("Should be Err"),
+            _ => panic!("Not Raised(result)"),
+        }
+
+        match result_uefi {
+            Err(e) => {
+                if let ErrorType::UefiError(err) = e.error_type {
+                    assert_eq!(err.status(), uefi::Status::ABORTED, "uefi status mismatch");
+                } else {
+                    panic!("Expected UefiError, but got {:?}", e.error_type);
+                }
+            }
+            _ => panic!("Not Raised(uefi)"),
+        }
+
+        match result_acpi {
+            Err(e) => {
+                if let ErrorType::AcpiError(err) = e.error_type {
+                    assert!(
+                        matches!(err, acpi::AcpiError::InvalidFacsAddress),
+                        "acpi variant mismatch: {:?}", err
+                    );
+                } else {
+                    panic!("Expected AcpiError, but got {:?}", e.error_type);
+                }
+            }
+            _ => panic!("Not Raised(acpi)"),
         }
     }
 }

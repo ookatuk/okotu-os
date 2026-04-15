@@ -1,5 +1,5 @@
-﻿# okots (Okots Kernel Open Test System)
-> An OS with many dependencies, seemingly meticulously designed but bit really.
+# okots (Okots Kernel Open Test System)
+> An OS with many dependencies, seemingly meticulously designed but not really.
 
 > [!IMPORTANT]
 > because I'm inexperienced, the commit size is huge, so I can't guarantee proper development.
@@ -8,7 +8,7 @@
 > Please note that many comments and commits are in Japanese.
 Also, there are cases where there are no comments at all.
 
-This readme is full of jokes,
+This readme has just the right amount of jokes (hopefully).
 
 As this project is still in an early stage, commits may be large and development may be somewhat unstable.
 # Description
@@ -32,6 +32,7 @@ We plan to specify the app version in YAML instead of XML!
 * mkfs.msdos(dosfstools)
 * nasm
 * sccache
+
 ### Debug
 * qemu-system-x86_64
 * ovmf
@@ -76,7 +77,8 @@ We plan to specify the app version in YAML instead of XML!
 >
 > To save your storage (and your sanity), we strongly recommend using sccache and moving the target folder to a temporary partition.
 >
-> We are currently seeking suggestions on how to address this issue.
+> We are currently seeking suggestions on how to address this issue.\
+> (Or just buy more storage. That works too.)
 
 > [!WARNING]
 > **Microcode Notice**:
@@ -100,7 +102,7 @@ We plan to specify the app version in YAML instead of XML!
 > ```
 
 ## What is the `log_viewer`?
-> This is the official log viewer.
+> This is the official log viewer.\
 >
 > Please note that this module is hosted in a separate repository. To use it, you must **request access** to the repository or **request the pre-compiled binary** from the maintainers.
 >
@@ -111,20 +113,9 @@ We plan to specify the app version in YAML instead of XML!
 > ```bash
 > cargo make run
 > ```
-> I just don't want to regret because my code is so bad
 
-> [!TIP] 
-> ### How to run test?
+## How to Run Tests?
+
+> [!TIP]
 > This OS can use `cargo make test`.\
 > However, because it runs as an application and not as an operating system, some parts cannot be tested.
-
-### ---
-Are there too many dependencies?
-
-Are the development environment requirements too stringent?
-
-If there's no GUI, what's the point of using ligatures, logically speaking?
-
-If you think there are too many dependencies... you're right. Too bad!
-
-**I'm making this (a tiny bit) extravagant!**

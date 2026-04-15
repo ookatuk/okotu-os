@@ -1,6 +1,9 @@
 [package]
 name = "test_os_v2"
 version = "0.1.0"
+
+license = "Apache-2.0"
+
 edition = "2024"
 
 [features]
@@ -71,7 +74,6 @@ spinning_top = { version = "0.3.0", default-features = false }
 sha3 = "0.10"
 walkdir = "^2.5"
 hex = { version = "^0.4" }
-nasm-rs = "^0.3"
 
 [profile.dev]
 opt-level = 1

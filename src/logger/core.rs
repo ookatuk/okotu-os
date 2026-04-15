@@ -83,7 +83,7 @@ pub fn add_log(data: &OsLog) {
             return;
         }
 
-        if lock.len() == cap {
+        while lock.len() >= cap && cap > 0 {
             lock.pop_front();
             LOG_HEAD_ID.fetch_add(1, Ordering::SeqCst);
         }
