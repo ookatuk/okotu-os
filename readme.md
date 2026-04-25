@@ -1,6 +1,11 @@
 ﻿# okots (Okots Kernel Open Test System)
 > An OS with many dependencies, seemingly meticulously designed but bit really.
 
+> [!WARNING]
+> There are vulnerabilities in several dependencies.(in all branches)
+> 
+> These will be fixed in the future.
+
 > [!IMPORTANT]
 > because I'm inexperienced, the commit size is huge, so I can't guarantee proper development.
 
